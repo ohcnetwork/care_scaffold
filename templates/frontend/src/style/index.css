@@ -1,0 +1,107 @@
+/*
+ * Plugin stylesheet.
+ *
+ * The plugin is a SEPARATE Tailwind build — it inherits nothing from care_fe. The CARE
+ * palette below is reproduced from care_fe/tailwind.config.js + src/style/index.css so
+ * `bg-primary-700`, `text-secondary-900`, `bg-warning-100` etc. resolve identically.
+ *
+ * Utilities are nested under .__PLUGIN_CONTAINER__ so plugin CSS cannot leak into the host.
+ */
+
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* CARE primary — green */
+  --color-primary-50: #ecfdf5;
+  --color-primary-100: #def7ec;
+  --color-primary-200: #bcf0da;
+  --color-primary-300: #84e1bc;
+  --color-primary-400: #31c48d;
+  --color-primary-500: #0d9f6e;
+  --color-primary-600: #057a55;
+  --color-primary-700: #046c4e;
+  --color-primary-800: #03543f;
+  --color-primary-900: #014737;
+  --color-primary: #0d9f6e;
+
+  /* CARE secondary — purple-tinted greys */
+  --color-secondary-50: #f9fafb;
+  --color-secondary-100: #fbfafc;
+  --color-secondary-200: #f7f5fa;
+  --color-secondary-300: #f1edf7;
+  --color-secondary-400: #dfdae8;
+  --color-secondary-500: #bfb8cc;
+  --color-secondary-600: #9187a1;
+  --color-secondary-700: #7d728f;
+  --color-secondary-800: #6a5f7a;
+  --color-secondary-900: #453c52;
+
+  /* Semantic aliases used throughout CARE for status colour */
+  --color-warning-50: var(--color-amber-50);
+  --color-warning-100: var(--color-amber-100);
+  --color-warning-200: var(--color-amber-200);
+  --color-warning-300: var(--color-amber-300);
+  --color-warning-400: var(--color-amber-400);
+  --color-warning-500: var(--color-amber-500);
+  --color-warning-600: var(--color-amber-600);
+  --color-warning-700: var(--color-amber-700);
+  --color-warning-800: var(--color-amber-800);
+  --color-warning-900: var(--color-amber-900);
+
+  --color-alert-50: var(--color-violet-50);
+  --color-alert-100: var(--color-violet-100);
+  --color-alert-200: var(--color-violet-200);
+  --color-alert-300: var(--color-violet-300);
+  --color-alert-400: var(--color-violet-400);
+  --color-alert-500: var(--color-violet-500);
+  --color-alert-600: var(--color-violet-600);
+  --color-alert-700: var(--color-violet-700);
+  --color-alert-800: var(--color-violet-800);
+  --color-alert-900: var(--color-violet-900);
+
+  --color-danger-50: var(--color-red-50);
+  --color-danger-100: var(--color-red-100);
+  --color-danger-200: var(--color-red-200);
+  --color-danger-300: var(--color-red-300);
+  --color-danger-400: var(--color-red-400);
+  --color-danger-500: var(--color-red-500);
+  --color-danger-600: var(--color-red-600);
+  --color-danger-700: var(--color-red-700);
+  --color-danger-800: var(--color-red-800);
+  --color-danger-900: var(--color-red-900);
+}
+
+@layer base {
+  :root {
+    --radius: 0.5rem;
+  }
+
+  /* Tailwind v4 defaults borders to currentColor; CARE keeps the v3 grey. */
+  .__PLUGIN_CONTAINER__ *,
+  .__PLUGIN_CONTAINER__ ::after,
+  .__PLUGIN_CONTAINER__ ::before {
+    border-color: var(--color-gray-200, currentColor);
+  }
+
+  .__PLUGIN_CONTAINER__ button:not(:disabled),
+  .__PLUGIN_CONTAINER__ [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  /* Inherit Figtree from the host — re-importing it duplicates the font download. */
+  .__PLUGIN_CONTAINER__ {
+    font-family: inherit;
+    color: var(--color-secondary-900);
+  }
+}
+
+@layer utilities {
+  .__PLUGIN_CONTAINER__ {
+    @tailwind utilities;
+  }
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+__pycache__/
+*.py[co]
+*.egg-info/
+.DS_Store
+.env
+.env.local
+.agent/

@@ -1,0 +1,40 @@
+{
+  "name": "__PLUGIN_FE__",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "__PLUGIN_DESCRIPTION__",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite preview & vite build --watch",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@radix-ui/react-slot": "^1.2.2",
+    "@tailwindcss/vite": "^4.1.4",
+    "@tanstack/react-query": "^5.72.2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.575.0",
+    "react-i18next": "^15.4.1",
+    "tailwind-merge": "^3.2.0",
+    "tailwindcss": "^4.1.4"
+  },
+  "peerDependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@originjs/vite-plugin-federation": "^1.4.1",
+    "@types/node": "^22.14.1",
+    "@types/react": "^19.1.1",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react-swc": "^3.8.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "typescript": "~5.8.3",
+    "vite": "^6.2.6"
+  }
+}
