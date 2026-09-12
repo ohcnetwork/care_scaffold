@@ -1,0 +1,48 @@
+name: Bootstrap plugin idea issues
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  create-issues:
+    if: >-
+      github.repository != 'ohcnetwork/care_scaffold' &&
+      github.event.repository.is_template == false &&
+      github.event.repository.fork == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Create plugin idea issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          jq -c '.[]' .github/bootstrap-issues/issues.json | while read -r issue; do
+            title="$(jq -r '.title' <<< "$issue")"
+            body="$(jq -r '.body' <<< "$issue")"
+
+            if gh issue list --state all --limit 100 --json title |
+              jq -e --arg title "$title" 'any(.[]; .title == $title)' >/dev/null; then
+              echo "Issue already exists: $title"
+              continue
+            fi
+
+            gh issue create --title "$title" --body "$body"
+          done
+
+      - name: Remove one-time bootstrap files
+        run: |
+          git rm -r \
+            .github/bootstrap-issues \
+            .github/workflows/bootstrap-plugin-issues.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Remove one-time issue bootstrap"
+          git push
