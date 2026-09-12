@@ -1,0 +1,102 @@
+[
+  {
+    "title": "Build care_hr for workforce records",
+    "body": "## Category\n\nWorkforce\n\n## Plugin idea\n\nBuild `care_hr` to manage employee master data, postings, transfers, sanctioned versus filled posts, and service records.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_shift for workforce scheduling",
+    "body": "## Category\n\nWorkforce\n\n## Plugin idea\n\nBuild `care_shift` to manage duty rosters, shift patterns, on-call assignments, and shift swaps.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_payroll for payroll management",
+    "body": "## Category\n\nWorkforce\n\n## Plugin idea\n\nBuild `care_payroll` to manage salary, allowances, and deductions.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_asset for equipment management",
+    "body": "## Category\n\nFacility operations\n\n## Plugin idea\n\nBuild `care_asset` to manage the equipment register, maintenance, calibration, downtime, and annual maintenance contracts (AMCs).\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_inventory for stock management",
+    "body": "## Category\n\nFacility operations\n\n## Plugin idea\n\nBuild `care_inventory` to manage drugs and consumables, stock, indents, expiry, and batch recalls.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_procurement for purchasing",
+    "body": "## Category\n\nFacility operations\n\n## Plugin idea\n\nBuild `care_procurement` to manage tenders, purchase orders, vendors, and receipts.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_biomedical_waste for waste compliance",
+    "body": "## Category\n\nFacility operations\n\n## Plugin idea\n\nBuild `care_biomedical_waste` to manage segregation, disposal, and statutory returns for biomedical waste.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_housekeeping for sanitation workflows",
+    "body": "## Category\n\nFacility operations\n\n## Plugin idea\n\nBuild `care_housekeeping` to manage sanitation rounds, linen, and ward hygiene checklists.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_infrastructure for facility infrastructure",
+    "body": "## Category\n\nFacility operations\n\n## Plugin idea\n\nBuild `care_infrastructure` to manage buildings, utilities, power, oxygen plants, and water systems.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_referrals for referral loop closure",
+    "body": "## Category\n\nClinical services\n\n## Plugin idea\n\nBuild `care_referrals` to manage referrals out and back, acceptance, and referral loop closure.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_transport for ambulance operations",
+    "body": "## Category\n\nClinical services\n\n## Plugin idea\n\nBuild `care_transport` to manage ambulance dispatch, fleet, crews, and trip logs.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_blood_bank for blood-bank workflows",
+    "body": "## Category\n\nClinical services\n\n## Plugin idea\n\nBuild `care_blood_bank` to manage donors, blood units, cross-matching, and issue workflows.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_pharmacy for dispensing workflows",
+    "body": "## Category\n\nClinical services\n\n## Plugin idea\n\nBuild `care_pharmacy` to manage dispensing, prescriptions, and substitutions.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_ot for operation theatre management",
+    "body": "## Category\n\nClinical services\n\n## Plugin idea\n\nBuild `care_ot` to manage operation theatre scheduling, utilisation, and surgical safety.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_emergency for emergency department workflows",
+    "body": "## Category\n\nClinical services\n\n## Plugin idea\n\nBuild `care_emergency` to manage triage, emergency department tracking, medico-legal cases, and disaster mode.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_lab for laboratory workflows",
+    "body": "## Category\n\nClinical services\n\n## Plugin idea\n\nBuild `care_lab` to manage orders, specimens, results, and critical-value alerts.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_dialysis for dialysis services",
+    "body": "## Category\n\nClinical services\n\n## Plugin idea\n\nBuild `care_dialysis` to manage chair scheduling and dialysis session records.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_immunization for immunization programmes",
+    "body": "## Category\n\nPublic health programmes\n\n## Plugin idea\n\nBuild `care_immunization` to manage schedules, due lists, vaccine lots, adverse events following immunization (AEFI), and coverage.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_maternal for maternal and newborn care",
+    "body": "## Category\n\nPublic health programmes\n\n## Plugin idea\n\nBuild `care_maternal` to manage antenatal care, postnatal care, delivery, and newborn linkage.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_notifiable_disease for disease surveillance",
+    "body": "## Category\n\nPublic health programmes\n\n## Plugin idea\n\nBuild `care_notifiable_disease` to manage case notifications, contact tracing, and outbreak line lists.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_tb for tuberculosis programmes",
+    "body": "## Category\n\nPublic health programmes\n\n## Plugin idea\n\nBuild `care_tb` to manage tuberculosis programme registers and reporting.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_ncd for non-communicable disease programmes",
+    "body": "## Category\n\nPublic health programmes\n\n## Plugin idea\n\nBuild `care_ncd` to manage non-communicable disease programme registers and reporting.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_hiv for HIV programmes",
+    "body": "## Category\n\nPublic health programmes\n\n## Plugin idea\n\nBuild `care_hiv` to manage HIV programme registers and reporting.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_nutrition for nutrition programmes",
+    "body": "## Category\n\nPublic health programmes\n\n## Plugin idea\n\nBuild `care_nutrition` to manage growth monitoring and supplementation.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  },
+  {
+    "title": "Build care_screening for screening programmes",
+    "body": "## Category\n\nPublic health programmes\n\n## Plugin idea\n\nBuild `care_screening` to manage camps, population screening, and recall workflows.\n\nUse `care_scaffold` to turn this idea into a project-specific brief before designing or implementing the plugin."
+  }
+]
