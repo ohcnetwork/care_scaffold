@@ -13,7 +13,10 @@ Execute [`bootstrap.prompt.md`](bootstrap.prompt.md). It is self-contained and i
 
 ## If the user is already mid-build
 
-Load the relevant skill(s) from `skills/` on demand:
+First confirm the stack exists: `$WORKSPACE/care` and `$WORKSPACE/care_fe` cloned, backend
+answering on :9000, `care_fe` on :4000, and `.agent/core-notes.md` written. If any of that is
+missing, go run [`bootstrap.prompt.md`](bootstrap.prompt.md) Phases 1–4.5 before writing plugin
+code. Then load the relevant skill(s) from `skills/` on demand:
 
 | Skill | Load it when… |
 | --- | --- |
@@ -33,6 +36,12 @@ Load the relevant skill(s) from `skills/` on demand:
 review blocker. Before editing core, prove that no existing extension point, `meta` JSON field, or
 Django signal can do the job. If you must edit core, the change must be *generic* — usable by any
 plugin, naming no plugin.
+
+## The rule that comes before it
+
+**Never write plugin code against a CARE you have not cloned, run and read.** No "I'll set up the
+stack later", no "the user probably has it running", no working from memory of the CARE API. Every
+model field, extension point and manifest key must be citable from the local checkouts.
 
 ## Conventions in `templates/`
 

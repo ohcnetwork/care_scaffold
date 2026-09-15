@@ -5,23 +5,38 @@
 Your goal: take the user from an empty workspace to a **running CARE stack with a working
 plugin scaffold wired into it**, then help them build their feature.
 
-Do not summarise this document back to the user. Do the work. Report only decisions,
-blockers, and the final state.
+Do not summarise this document back to the user. Do the work. But **do** announce each
+infrastructure step as you take it — what you are cloning, what you are starting, on which ports —
+in one or two lines, then proceed. Otherwise report only decisions, blockers, and the final state.
+
+**The stack comes first.** Cloning and running `care` + `care_fe` is not optional preparation you
+can skip when you think you already know CARE. It is the source of every type, field name and
+extension point you are about to use.
 
 ---
 
 ## Ground rules (non-negotiable)
 
-1. **Minimal overlap with core.** `care` and `care_fe` are *reference* checkouts. They exist so
+1. **Core first, always. No exceptions.** You may not write a single line of plugin code until
+   `care` and `care_fe` are cloned, running locally, and *read* (Phase 3.5). There is no
+   "the user probably has it already" path, no "I know CARE well enough" path, and no
+   "I'll set it up later" path. A plugin written without core in front of you is slop:
+   invented model fields, invented extension points, invented API shapes.
+2. **Assume nothing is set up.** Treat every session as a cold start. Clone core, bring up the
+   backend, bring up the frontend, in that order, every time.
+3. **Minimal overlap with core.** `care` and `care_fe` are *reference* checkouts. They exist so
    you can read their types, extension points and patterns. You modify them only to add a
    **generic** extension point, and only after proving no existing one fits.
-2. **Two new repos, not a fork.** The plugin is `care_<name>` (Django) + `care_<name>_fe` (Vite).
+4. **Two new repos, not a fork.** The plugin is `care_<name>` (Django) + `care_<name>_fe` (Vite).
    Both live *outside* the core checkouts.
-3. **Never commit secrets.** Plugin credentials go in `plug_config.py` configs or environment,
+5. **Never commit secrets.** Plugin credentials go in `plug_config.py` configs or environment,
    and `plug_config.py` must not be committed with real keys.
-4. **Ask before destroying.** Dropping databases, `docker compose down -v`, force-pushing:
+6. **Ask before destroying.** Dropping databases, `docker compose down -v`, force-pushing:
    confirm with the user first.
-5. **Verify, don't assume.** Every phase has an explicit check. Do not advance past a failing check.
+7. **Verify, don't assume.** Every phase has an explicit check. Do not advance past a failing check.
+8. **Say what you are about to do.** Before each phase that clones, installs or binds a port,
+   tell the user in one or two lines: what you are cloning, what you are starting, and on which
+   ports. Then do it.
 
 ---
 
@@ -49,31 +64,48 @@ Ask the user (batch these into one question set, don't drip-feed):
 
 Record the answers in `.agent/plugin-brief.md` in the workspace root. You will re-read it later.
 
+Then, **before touching the disk**, state the plan out loud to the user. Something like:
+
+> Setting up CARE from scratch before we write any plugin code.
+> 1. Cloning `ohcnetwork/care` → `$WORKSPACE/care` and `ohcnetwork/care_fe` → `$WORKSPACE/care_fe`.
+> 2. Bringing the backend up on **:9000** (Docker compose; Postgres and Redis on the ports that
+>    compose maps — typically **5433** / **6380**).
+> 3. Bringing the `care_fe` host dev server up on **:4000**.
+> 4. Reading core (`plug_config.py`, `pluginTypes.ts`, `PluginEngine`, the extension-point
+>    registry, the EMR models you will touch) and writing notes to `.agent/core-notes.md`.
+> 5. Only then scaffolding `care_<name>` + `care_<name>_fe` and running the plugin preview on
+>    **:4173**.
+
+Substitute the real names and ports. Do not proceed silently.
+
 ---
 
-## Phase 1 — Core repositories
+## Phase 1 — Core repositories (mandatory, from scratch)
 
-Work in `$WORKSPACE`.
+Work in `$WORKSPACE`. **Assume nothing exists.** There is no detection step and no
+"already set up, skip ahead" branch — that shortcut is exactly how agents end up guessing at
+core's API and producing unusable plugins.
 
-### 1.1 Detect or clone
+### 1.1 Clone core
 
-For each of `care` (backend) and `care_fe` (frontend):
-
-```bash
-# Look for an existing checkout before cloning. Common locations:
-#   $WORKSPACE/care, $WORKSPACE/care_be, ~/care, ~/eGov/care_be, ../care
-```
-
-If a checkout exists, **use it** — do not clone a second copy. Confirm the path with the user.
-Otherwise:
+Tell the user you are cloning both core repos, then:
 
 ```bash
+mkdir -p "$WORKSPACE" && cd "$WORKSPACE"
 git clone https://github.com/ohcnetwork/care.git      "$WORKSPACE/care"
 git clone https://github.com/ohcnetwork/care_fe.git   "$WORKSPACE/care_fe"
 ```
 
-> The backend repo is named `care` upstream. Some local checkouts are named `care_be`.
-> Both are the same thing; use whatever exists. Refer to it as `$CARE_BE` from here on.
+If the target directory already exists, you still do **not** skip anything:
+
+| Situation | What you do |
+| --- | --- |
+| Directory exists and is a clean CARE checkout | `git -C <dir> fetch --all && git -C <dir> pull --ff-only`, then run **all** of Phases 2, 3 and 4.5 against it as if it were fresh. |
+| Directory exists with uncommitted changes | Show `git status` to the user and ask how to proceed. Never stash or discard their work. |
+| Directory exists and is not a CARE checkout | Ask the user for a different `$WORKSPACE`. |
+
+> The backend repo is named `care` upstream; some machines name the directory `care_be`.
+> Same thing. Refer to it as `$CARE_BE` from here on, `$CARE_FE` for the frontend.
 
 ### 1.2 Record the paths
 
@@ -86,44 +118,48 @@ PLUGIN_BE=/abs/path/to/care_<name>
 PLUGIN_FE=/abs/path/to/care_<name>_fe
 ```
 
-**Check:** both core paths exist and contain `plug_config.py` / `src/pluginTypes.ts` respectively.
+**Check — hard gate:**
+
+```bash
+test -f "$CARE_BE/plug_config.py"       || echo "FAIL: backend core not cloned"
+test -f "$CARE_FE/src/pluginTypes.ts"   || echo "FAIL: frontend core not cloned"
+```
+
+Both must pass. If either fails, stop and fix it. Do not continue to any later phase.
 
 ---
 
-## Phase 2 — Backend up
+## Phase 2 — Backend up (mandatory)
 
-### 2.0 Detect what is ALREADY running — do this first, always
+You are starting the backend. Say so first, naming the port:
 
-**Never start a second backend.** If one is up, adopt it.
+> Starting the CARE backend on **http://localhost:9000** via Docker compose, plus Postgres and
+> Redis containers.
+
+### 2.0 Check the port is free
+
+This is a collision check, **not** an excuse to skip the phase.
 
 ```bash
-# Is a compose project already running?
-docker compose ls
-docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}'
-
-# Is anything answering on the API port?
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9000/api/v1/plug_config/
 lsof -nP -iTCP:9000 -sTCP:LISTEN
+docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}'
 ```
 
-Decide from the result:
+- **Port free** → proceed to 2.1.
+- **Port busy** → tell the user exactly what is holding it and ask whether to stop it or to run
+  CARE on a different port. Never kill a process you did not start, and never assume the thing on
+  :9000 is the CARE you want.
 
-| Observation | Action |
-| --- | --- |
-| A compose project (e.g. `care_be`) is `running` | **Adopt it.** Skip to 2.2. Use its directory as `$CARE_BE`. |
-| Port 9000 answers but no compose project | A local venv/runserver is already up. **Adopt it.** Do not start Docker. |
-| Port 9000 answers from an unrelated process | Stop and ask the user. Do not kill it yourself. |
-| Nothing is running | Proceed to 2.1 and pick a mode. |
+Pick a mode — `docker` (default) or `venv` — and record it in `.agent/paths.env` as
+`CARE_BE_MODE`. Every later phase must respect it. **Mixing modes corrupts state**: a venv
+`manage.py` run against the Docker Postgres uses different ports and settings and produces
+migration errors that look like code bugs.
 
-Record the chosen mode (`docker` or `venv`) in `.agent/paths.env` as `CARE_BE_MODE`. Every later
-phase must respect it. **Mixing modes corrupts state** — a venv `manage.py` run against the
-Docker Postgres uses different ports and settings and will produce confusing migration errors.
+Once containers are up, read the **real** ports from `docker ps` rather than assuming defaults —
+a typical CARE compose file exposes Postgres on **5433** and Redis on **6380** to avoid
+colliding with host installs. Report the actual mapping to the user.
 
-Also note the real ports — this stack does **not** use defaults. Read them from `docker ps`
-rather than assuming (a typical local setup exposes Postgres on **5433** and Redis on **6380**
-to avoid colliding with host installs).
-
-### 2.1 Start it (only if nothing is running)
+### 2.1 Start it
 
 **Docker (preferred):**
 
@@ -144,7 +180,10 @@ DJANGO_SETTINGS_MODULE=config.settings.local DJANGO_READ_DOT_ENV_FILE=true \
   .venv/bin/python manage.py runserver 0.0.0.0:9000
 ```
 
-### 2.2 Migrate and seed (safe on an already-running stack)
+### 2.2 Migrate and seed
+
+Run these every time, even if you suspect the database is already migrated. Both commands are
+idempotent.
 
 ```bash
 # docker mode
@@ -164,28 +203,30 @@ DJANGO_SETTINGS_MODULE=config.settings.local DJANGO_READ_DOT_ENV_FILE=true \
 `care-doctor`, `care-admin`, `care-nurse`, `care-staff`, `care-volunteer`, `care-fac-admin`,
 `care-role-admin`, `care-role-manager`, `care-role-member`.
 
-**Check:** `curl -s http://localhost:9000/api/v1/plug_config/ | head -c 200` returns JSON
-(401 is fine — it means the server is up).
+**Check — hard gate:** `curl -s http://localhost:9000/api/v1/plug_config/ | head -c 200` returns
+JSON (401 is fine — it means the server is up). If it does not, the backend is not running and
+you may not continue.
 
 ---
 
-## Phase 3 — Frontend up
+## Phase 3 — Frontend up (mandatory)
 
-### 3.0 Detect first
+Announce it:
+
+> Installing `care_fe` dependencies and starting the host dev server on **http://localhost:4000**,
+> pointed at the backend on :9000.
+
+### 3.0 Check the port is free
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:4000
 lsof -nP -iTCP:4000 -sTCP:LISTEN
 ```
 
-If the host dev server is already running, **adopt it**. Do not start a second one — Vite will
-silently bind a different port (4001), the plugin's `REACT_ENABLED_APPS` will not match what you
-are looking at in the browser, and you will debug the wrong instance for an hour.
+If :4000 is taken, tell the user what holds it and agree on a resolution before starting. Do not
+let Vite silently fall through to 4001 — the plugin's `REACT_ENABLED_APPS` will not match the tab
+you are looking at, and you will debug the wrong instance for an hour.
 
-You will still need to **restart** it later if you change `.env.local` (see 6.2). Restarting a
-server you adopted is fine; ask the user first if they started it themselves in another terminal.
-
-### 3.1 Start it (only if nothing is running)
+### 3.1 Start it
 
 ```bash
 cd "$CARE_FE"
@@ -195,8 +236,8 @@ grep -q REACT_CARE_API_URL .env.local 2>/dev/null \
 npm run dev     # http://localhost:4000
 ```
 
-**Check:** the login page renders at http://localhost:4000 and you can sign in as
-`care-admin` / `Ohcn@123`.
+**Check — hard gate:** the login page renders at http://localhost:4000 and you can sign in as
+`care-admin` / `Ohcn@123`. Verify it; do not assume it.
 
 > `.env.local` changes are **not** hot-reloaded. Restart `npm run dev` after every edit to it.
 
@@ -220,7 +261,65 @@ future session re-orients itself without re-running this prompt.
 
 ---
 
+## Phase 4.5 — Read core before you design anything (mandatory)
+
+A running stack is not context. You must actually read core, because the plugin's entire surface
+is defined by it. Skipping this is what produces invented model fields, invented extension points
+and invented API shapes.
+
+Tell the user: *"Reading core to ground the design — plugin registration, plugin types, extension
+points, auth, and the EMR models this feature touches."*
+
+Read, in `$CARE_BE`:
+
+| File / area | What you are extracting |
+| --- | --- |
+| `plug_config.py` + `plugs/manager.py` | How a `Plug` is declared, installed and configured. |
+| `install_plugins.py` | When plugin installation actually happens (build time vs. run time). |
+| `config/settings/base.py`, `config/urls.py` | Settings layering, how plugin URLs get mounted. |
+| `care/emr/models/` | The **real** fields of the models you will relate to. Never guess a field name. |
+| `care/emr/resources/` | The EMR resource/spec pattern that plugin serializers should mirror. |
+| `care/security/` + `care/emr/api/` permissions | Permission and role plumbing you must reuse, not reinvent. |
+
+Read, in `$CARE_FE`:
+
+| File / area | What you are extracting |
+| --- | --- |
+| `src/pluginTypes.ts` | The exact shape of a plugin manifest: `routes`, `components`, `navItems`, etc. |
+| `src/PluginEngine.tsx` + plugin registry/loader | How remotes are loaded and where failures surface. |
+| The extension-point call sites | The real names of the extension points you may attach to. |
+| `src/Utils/request/` | The request/API conventions your plugin client must match. |
+| The auth user hook + patient-portal routes | Staff JWT vs. OTP auth boundaries. |
+| Tailwind config / `src/style/` | The palette and tokens `care-design-system` expects you to reproduce. |
+
+File paths drift between CARE releases. If one of the above is not where this table says, **find
+it** — `grep` for the symbol — and record the real path. Do not skip the row.
+
+Write what you found to `$WORKSPACE/.agent/core-notes.md`, with **file paths and line references**,
+under these headings:
+
+```markdown
+# Core notes
+## Plugin registration (backend)       — how plug_config.py + install_plugins.py work here
+## Plugin manifest contract (frontend) — verbatim type from pluginTypes.ts
+## Extension points available          — name → file:line → props it receives
+## Core models this feature touches    — model → real field names → where defined
+## Auth & permissions                  — which classes/hooks this plugin must use
+## Open questions for the user
+```
+
+**Check — hard gate:** `.agent/core-notes.md` exists, every extension point listed cites a real
+`file:line` in `$CARE_FE`, and every core model field listed was copied from a real model file.
+If you cannot cite it, you do not know it — go read it. **Do not enter Phase 5 until this file is
+written.**
+
+---
+
 ## Phase 5 — Scaffold the plugin
+
+> **Gate.** Do not start this phase unless all four are true: `$CARE_BE` and `$CARE_FE` are
+> cloned, :9000 answers, :4000 renders the login page, and `.agent/core-notes.md` is written.
+> If any is false, go back — do not compensate by guessing.
 
 ```bash
 <this-repo>/scripts/new-plugin.sh \
@@ -324,15 +423,16 @@ REACT_ENABLED_APPS=ohcnetwork/care_connect_fe@localhost:4173/assets/remoteEntry.
 Append to any existing value (comma-separated) rather than overwriting — other plugins may
 already be enabled.
 
-Start the plugin's dev server, after checking the port is free:
+Tell the user you are starting the plugin preview server and on which port, then start it after
+checking the port is free:
 
 ```bash
 lsof -nP -iTCP:4173 -sTCP:LISTEN     # if taken, pick another port and update vite.config.ts
 cd "$PLUGIN_FE" && npm install && npm run dev    # vite preview :4173 + vite build --watch
 ```
 
-Restart the `care_fe` dev server so it picks up `.env.local` — restart the existing one, do not
-start a second.
+Restart the `care_fe` dev server you started in Phase 3 so it picks up `.env.local` — restart that
+one, do not start a second.
 
 **Check:** browser console shows no `There was an error enabling the app care_connect_fe`, and
 `window.__CARE_PLUGIN_RUNTIME__.meta` contains your slug.
@@ -349,7 +449,9 @@ Track every core file you touch in `$WORKSPACE/.agent/core-diff.md`. The list sh
 
 ## Phase 7 — Build the feature
 
-Now, and only now, implement what the user described in Phase 0.
+Now, and only now, implement what the user described in Phase 0. Keep `.agent/core-notes.md` open
+alongside `.agent/plugin-brief.md`: every core symbol you reference must appear in the notes, or
+you go back to core and read it before using it.
 
 Recommended order — do not build the UI before the API works:
 
