@@ -5,6 +5,14 @@ description: Load FIRST for any CARE plugin work. Decides what belongs in the pl
 
 # CARE Plugin Architecture
 
+## Precondition
+
+This skill describes core's contracts; it does not replace reading them. Before applying anything
+below, `care` and `care_fe` must be cloned locally, running (:9000 and :4000), and read — see
+`bootstrap.prompt.md` Phases 1–4.5. If `.agent/core-notes.md` does not exist, stop and go do that
+first. Designing a plugin from memory of the CARE API produces fields and extension points that
+do not exist.
+
 ## The prime directive
 
 > A plugin owns a **complete vertical feature** — models, migrations, API, UI, i18n, background

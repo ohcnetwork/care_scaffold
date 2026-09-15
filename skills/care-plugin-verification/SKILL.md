@@ -14,27 +14,31 @@ description: Running, testing and debugging a CARE plugin end to end — dev ser
 | Frontend host | `npm run dev` in `care_fe` | 4000 |
 | Plugin frontend | `npm run dev` in `care_<name>_fe` (`vite preview & vite build --watch`) | 4173 (next plugin: 10125, …) |
 
-## Adopt what is running — never start a duplicate
+## Your stack — one of each, started by you
 
-Before starting anything, find out what already exists:
+This skill assumes you followed `bootstrap.prompt.md`: core was cloned fresh and every server
+below was started by you, with its port announced. Read `.agent/paths.env` for the real paths and
+`CARE_BE_MODE`.
+
+Before starting anything, confirm what is bound:
 
 ```bash
-docker compose ls                                   # running compose projects
 docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}'
 lsof -nP -iTCP:9000 -sTCP:LISTEN                    # backend
 lsof -nP -iTCP:4000 -sTCP:LISTEN                    # care_fe host
 lsof -nP -iTCP:4173 -sTCP:LISTEN                    # plugin preview
 ```
 
-- **A compose project is up** → use it. Do not `make up` a second stack, and do not start a venv
-  backend beside it.
-- **Port 4000 is taken** → use that server. A second `vite` silently binds **4001**, so you end up
-  reading a browser tab whose `REACT_ENABLED_APPS` differs from the one you just edited.
+- **A port is held by your own server** → restart that one. Never start a second.
+- **A port is held by something you did not start** → report it to the user and agree on a port or
+  a shutdown. Do not kill it, and do not assume the thing on :9000 is the CARE you want — pointing
+  your plugin at a stranger's backend wastes hours.
+- **Port 4000 is taken** → a second `vite` silently binds **4001**, so you end up reading a browser
+  tab whose `REACT_ENABLED_APPS` differs from the one you just edited.
 - **Port 4173 is taken** → another plugin owns it. Choose a different `preview.port` rather than
   killing theirs.
 - Never mix Docker and venv backends against the same database. Ports and settings differ and you
   get migration errors that look like code bugs.
-- Do **not** kill a process you did not start without asking.
 
 Read real ports from `docker ps` rather than assuming defaults — a typical local CARE stack
 exposes Postgres on **5433** and Redis on **6380** to avoid colliding with host installs.
