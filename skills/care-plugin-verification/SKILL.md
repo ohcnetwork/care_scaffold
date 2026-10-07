@@ -5,49 +5,49 @@ description: Running, testing and debugging a CARE plugin end to end — dev ser
 
 # Verifying & Debugging a CARE Plugin
 
-## Dev topology
+## Isolated dev topology
 
-| Process | Command | Port |
-| --- | --- | --- |
-| Backend (Docker) | `make up` in `care` | 9000 |
-| Backend (venv) | `manage.py runserver 0.0.0.0:9000` | 9000 |
-| Frontend host | `npm run dev` in `care_fe` | 4000 |
-| Plugin frontend | `npm run dev` in `care_<name>_fe` (`vite preview & vite build --watch`) | 4173 (next plugin: 10125, …) |
-
-## Adopt what is running — never start a duplicate
-
-Before starting anything, find out what already exists:
+Run `bootstrap.prompt.md` first. It creates dedicated `$WORKSPACE/care` and
+`$WORKSPACE/care_fe` checkouts and saves this workspace's ports in `care-scaffold.env`.
+Load that file before using the commands below:
 
 ```bash
-docker compose ls                                   # running compose projects
-docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}'
-lsof -nP -iTCP:9000 -sTCP:LISTEN                    # backend
-lsof -nP -iTCP:4000 -sTCP:LISTEN                    # care_fe host
-lsof -nP -iTCP:4173 -sTCP:LISTEN                    # plugin preview
+source "$WORKSPACE/care-scaffold.env"
 ```
 
-- **A compose project is up** → use it. Do not `make up` a second stack, and do not start a venv
-  backend beside it.
-- **Port 4000 is taken** → use that server. A second `vite` silently binds **4001**, so you end up
-  reading a browser tab whose `REACT_ENABLED_APPS` differs from the one you just edited.
-- **Port 4173 is taken** → another plugin owns it. Choose a different `preview.port` rather than
-  killing theirs.
-- Never mix Docker and venv backends against the same database. Ports and settings differ and you
-  get migration errors that look like code bugs.
-- Do **not** kill a process you did not start without asking.
+| Process | Command | Saved host port |
+| --- | --- | --- |
+| Backend and dependencies | `"$WORKSPACE/.agent/compose.sh" up -d --wait --build` | `CARE_API_PORT` |
+| Frontend host (inside `$CARE_FE`) | `npm run dev -- --host 127.0.0.1 --port "$CARE_FE_PORT" --strictPort` | `CARE_FE_PORT` |
+| Plugin frontend (inside its repo) | `npm run dev` | `PLUGIN_PORT`, written to `vite.config.ts` |
+| PostgreSQL / Redis | Started by the Compose wrapper | `CARE_DB_PORT` / `CARE_REDIS_PORT` |
+| S3 / S3 console / debugger | Started by the Compose wrapper | `CARE_S3_PORT` / `CARE_S3_CONSOLE_PORT` / `CARE_DEBUG_PORT` |
 
-Read real ports from `docker ps` rather than assuming defaults — a typical local CARE stack
-exposes Postgres on **5433** and Redis on **6380** to avoid colliding with host installs.
+Always use the generated Compose wrapper for backend operations: it supplies the isolated
+project and port overrides. Do not adopt another checkout's containers or frontend server.
+Inspect a listener's command and working directory before deciding it belongs to this workspace:
 
-`care_fe/.env.local`:
-
+```bash
+"$WORKSPACE/.agent/compose.sh" ps
+lsof -nP -iTCP:"$CARE_API_PORT" -sTCP:LISTEN
+lsof -nP -iTCP:"$CARE_FE_PORT" -sTCP:LISTEN
+lsof -nP -iTCP:"$PLUGIN_PORT" -sTCP:LISTEN
 ```
-REACT_CARE_API_URL=http://127.0.0.1:9000
-REACT_ENABLED_APPS=ohcnetwork/care_connect_fe@localhost:4173/assets/remoteEntry.js,ohcnetwork/care_notifications_fe@localhost:10125/assets/remoteEntry.js
-```
+
+To check saved ports before a cold start, with this workspace's services stopped, run
+`python3 <scaffold>/scripts/configure-workspace.py --workspace "$WORKSPACE" --check-ports`.
+This checks availability without changing files. Saved ports stay the same on reruns.
+If an unrelated process has taken a saved port, stop and resolve the conflict explicitly; do not
+kill that process, adopt it, or let Vite increment the port. `strictPort: true` makes both frontend servers fail instead of silently drifting.
+
+`$CARE_FE/.env.local` must contain the saved `CARE_API_URL` as `REACT_CARE_API_URL` and the
+plugin entry `ohcnetwork/care_connect_fe@localhost:<PLUGIN_PORT>/assets/remoteEntry.js`, with
+`<PLUGIN_PORT>` replaced by its saved number. Additional plugins each need a separately checked,
+recorded port.
 
 Two things that are **not** hot-reloaded: `.env.local`, and the federated remote bundle.
-Restart `care_fe` for the former; hard-reload the browser after every plugin rebuild for the latter.
+Restart this workspace's `care_fe` for the former; hard-reload the browser after every plugin
+rebuild for the latter.
 
 ## Fast sanity ladder
 
@@ -55,17 +55,17 @@ Run these in order; the first failure tells you which layer is broken.
 
 ```bash
 # 1. Backend alive
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9000/api/v1/plug_config/
+curl -s -o /dev/null -w '%{http_code}\n' "$CARE_API_URL/api/v1/plug_config/"
 
 # 2. Plugin mounted in the URL tree
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9000/api/care_connect/config/   # not 404
+curl -s -o /dev/null -w '%{http_code}\n' "$CARE_API_URL/api/care_connect/config/"   # not 404
 
 # 3. Plugin installed in BOTH containers
-docker exec care_be-backend-1 pip show care_connect | head -2
-docker exec care_be-celery-1  pip show care_connect | head -2   # want 0.1.0-0.editable
+"$WORKSPACE/.agent/compose.sh" exec backend pip show care_connect
+"$WORKSPACE/.agent/compose.sh" exec celery pip show care_connect   # want 0.1.0-0.editable
 
 # 4. Remote bundle served
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:4173/assets/remoteEntry.js
+curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:$PLUGIN_PORT/assets/remoteEntry.js"
 
 # 5. Host loaded it — in the browser console
 window.__CARE_PLUGIN_RUNTIME__.meta
@@ -73,33 +73,27 @@ window.__CARE_PLUGIN_RUNTIME__.meta
 
 ## Playwright
 
-Requires the backend on :9000 and a production build of `care_fe`.
+Use only this workspace's backend, frontend and database. Before running any Playwright command,
+inspect `$CARE_FE/playwright.config.ts`, `tests/globalSetup`, the DB helpers and npm scripts.
+Upstream versions can hardcode frontend port 4000, default DB port 5432, automatically restore a
+database in global setup, or run reset commands through a host venv. Merely exporting
+`CARE_BACKEND_DIR` or `CARE_API_URL` does not override those implementations.
 
-```bash
-npm run playwright:install
-npm run build
-npm run playwright:test -- tests/path/to/spec.ts
-npm run playwright:test -- --workers=4
-npm run playwright:test:ui
-```
+Configure the workspace checkout's test settings before running tests:
 
-Tests create data that collides on re-run. Use the DB snapshot system:
+- Set the test base URL, web-server URL and strict preview port to the saved `CARE_FE_URL` and
+  `CARE_FE_PORT`; point auth/API helpers at `CARE_API_URL`.
+- Check every DB reset/snapshot/restore target against this workspace's `CARE_DB_PORT`, database
+  and credentials. Use a workspace-specific snapshot path. Route Django migrations and fixture
+  loading through `"$WORKSPACE/.agent/compose.sh" exec backend python manage.py ...`.
+- Inspect global setup's automatic restore before enabling it. Do not run stock DB scripts until
+  their configured targets are verified; they can overwrite another running stack's data.
+- Add the plugin's saved endpoint to `REACT_ENABLED_APPS` before building the host.
 
-```bash
-export CARE_BACKEND_DIR=/path/to/care
-npm run playwright:db-reset      # migrate + fixtures + snapshot (first time, ~30s)
-npm run playwright:db-restore    # before re-runs (~2s)
-npm run playwright:db-snapshot   # save current state as the new baseline
-npm run playwright:db-status
-```
-
-`globalSetup` auto-restores locally (not on CI). Write tests with `faker` / `Date.now()` for
-unique data; don't rely on cleanup. **`care_fe/tests/PLAYWRIGHT_GUIDE.md`** — in the host
-checkout, not in this scaffold — has the complete selector, form-interaction and assertion
-patterns. Read it before writing a test.
-
-For plugin tests, add the plugin to `REACT_ENABLED_APPS` so it is a build-time plugin and always
-present during the run.
+Then install Playwright, build the host and run the selected specs using the inspected scripts.
+Use unique test data and restore only this workspace's verified snapshot between runs.
+**`$CARE_FE/tests/PLAYWRIGHT_GUIDE.md`** contains the selector and assertion patterns; read it
+before writing a test.
 
 ## Symptom → cause
 
@@ -110,19 +104,18 @@ Plugins are pip-installed **at image build time** (`dev.Dockerfile` runs `instal
 registered or newly renamed plug does not exist in a running container until you rebuild:
 
 ```bash
-cd "$CARE_BE"
-make down && make build && make up     # NOT `make teardown` — that deletes the database volume
+"$WORKSPACE/.agent/compose.sh" up -d --wait --build
 ```
 
-If you previously used `docker exec … install_plugins.py` as a shortcut, remember it writes to a
-single container's writable layer, not the shared `care_local` image — so it must be run against
+If you previously installed the plugin inside a running container as a shortcut, it writes to a
+single container's writable layer, not the workspace image — so it must be run against
 **both** `backend` and `celery`, and it is discarded whenever a container is recreated. That is
 the usual reason one service behaves correctly and the other silently runs stale code with no
 import error.
 
 ```bash
-docker exec <container> python -c "import care_connect; print(care_connect.__file__)"
-docker exec <container> pip show care_connect
+"$WORKSPACE/.agent/compose.sh" exec backend python -c "import care_connect; print(care_connect.__file__)"
+"$WORKSPACE/.agent/compose.sh" exec celery pip show care_connect
 ```
 
 Also check the plugin is a **real directory** inside `$CARE_BE`, not a symlink — `COPY . /app`
@@ -139,7 +132,7 @@ Federation failures are caught and logged, then skipped. Check the console for
 - Does `manifest.components` actually contain the extension-point key, spelled exactly as in
   `SupportedPluginComponents`?
 
-### "404s for the plugin's lazy chunks against localhost:4000"
+### "404s for the plugin's lazy chunks against the frontend host"
 
 Federation retries against the plugin origin after failing on the host origin. **Harmless noise.**
 
@@ -156,7 +149,7 @@ The classic cause: a serializer field backed by a core model's `meta` JSON that 
 i18n key not found in any loaded namespace. The key must live in the **owning plugin's**
 `public/locale/en.json`, prefixed (`connect__…`), and resolution relies on `fallbackNS` in
 `care_fe/src/i18n.ts`. Verify the plugin's locale file is actually served:
-`curl http://localhost:4173/locale/en.json`.
+`curl "http://127.0.0.1:$PLUGIN_PORT/locale/en.json"`.
 
 ### "Staff sees no data / no action button, but the doctor does"
 
@@ -184,8 +177,8 @@ ipconfig getifaddr $(route -n get default | awk '/interface/{print $2}')
 ```
 
 Firefox additionally needs `media.peerconnection.ice.obfuscate_host_addresses=false`.
-Diagnose with `docker logs care-livekit | grep -A2 'ICE candidate pair stats'` — look for
-`responsesReceived: 0`.
+Inspect this workspace's LiveKit container logs for `ICE candidate pair stats` and
+`responsesReceived: 0`; identify the container from its recorded service configuration.
 
 ## General debugging discipline
 
@@ -198,9 +191,9 @@ Diagnose with `docker logs care-livekit | grep -A2 'ICE candidate pair stats'` �
 ## Pre-PR checks
 
 ```bash
-cd care_fe        && npx tsc --noEmit && npm run lint-fix && npm run format
-cd care_<name>_fe && npm run build
-cd care           && make checkmigration          # makemigrations --check --dry-run
+(cd "$CARE_FE" && npx tsc --noEmit && npm run lint-fix && npm run format)
+(cd "$WORKSPACE/care_<name>_fe" && npm run build)
+"$WORKSPACE/.agent/compose.sh" exec backend python manage.py makemigrations --check --dry-run
 ```
 
 - [ ] `.agent/core-diff.md` reviewed; every core file justified in one line.

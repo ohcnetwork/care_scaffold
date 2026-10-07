@@ -26,6 +26,9 @@ broken plugin fails **silently in the UI**. Always check the console.
 
 ## vite.config.ts
 
+The template's `__PLUGIN_PORT__` token below is replaced by `scripts/new-plugin.sh` using the
+workspace's saved `PLUGIN_PORT`. Generated files must contain the numeric port, not the token.
+
 ```ts
 import federation from "@originjs/vite-plugin-federation";
 
@@ -47,11 +50,13 @@ export default defineConfig({
     rollupOptions: { input: { main: "./index.html" }, output: { format: "esm" } },
   },
   resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
-  preview: { port: 4173, host: "0.0.0.0", cors: true, allowedHosts: true },
+  preview: { port: __PLUGIN_PORT__, host: "127.0.0.1", strictPort: true, cors: true, allowedHosts: true },
 });
 ```
 
-`package.json` dev script: `"dev": "vite preview & vite build --watch"` — preview serves
+Use the generated `npm run dev` runner: it builds first, fails on a busy preview port, then
+starts the watch build. Stopping it closes both preview and watcher. Later watch-build errors
+are reported while the server stays available for the next successful build. Preview serves
 `dist/assets/remoteEntry.js`; the watch build keeps it fresh. **There is no HMR across the
 federation boundary**: after a plugin rebuild you must hard-reload `care_fe`.
 
@@ -59,10 +64,12 @@ React/react-dom belong in `peerDependencies`, not `dependencies`.
 
 ## Enabling it in the host
 
-`care_fe/.env.local`:
+Use the isolated `$WORKSPACE/care_fe` checkout and source `$WORKSPACE/care-scaffold.env`.
+Its `.env.local` must set `REACT_CARE_API_URL` to the saved `CARE_API_URL` and use this entry,
+replacing `<PLUGIN_PORT>` with the saved number:
 
-```
-REACT_ENABLED_APPS=ohcnetwork/care_connect_fe@localhost:4173/assets/remoteEntry.js
+```text
+REACT_ENABLED_APPS=ohcnetwork/care_connect_fe@localhost:<PLUGIN_PORT>/assets/remoteEntry.js
 ```
 
 Format: `org/repo` or `org/repo@host/path/to/remoteEntry.js`, comma-separated for several plugins.
@@ -72,22 +79,24 @@ Format: `org/repo` or `org/repo@host/path/to/remoteEntry.js`, comma-separated fo
 - The resolved **slug** is the repo name (`care_connect_fe`) — that is what appears in
   `window.__CARE_PLUGIN_RUNTIME__.meta`.
 
-`.env.local` is **not** hot-reloaded. Restart `npm run dev` after editing it.
+`.env.local` is **not** hot-reloaded. Start or restart only this workspace's frontend with:
+
+```bash
+cd "$CARE_FE"
+npm run dev -- --host 127.0.0.1 --port "$CARE_FE_PORT" --strictPort
+```
 
 ### Preview port allocation
 
-Each plugin needs its own `preview.port`, hardcoded in its `vite.config.ts`, because several
-plugins run side by side against one host. There is no registry — pick an unused port and record
-it in the plugin's README. Ports already in use by known plugins:
+The bootstrap uses explicit ports from `care-scaffold.env`, allocates blank or missing entries,
+and saves the result in that same file. Pass `--port "$PLUGIN_PORT" --api-url "$CARE_API_URL"` to
+`scripts/new-plugin.sh` so the generated preview and API fallback match the workspace. A standalone generator invocation without
+`--port` selects an available port; use its reported endpoint when enabling the plugin.
 
-| Port | Plugin |
-| --- | --- |
-| 4173 | first/default plugin (`care_hello_fe`, `care_connect_fe`) |
-| 10120 | `care_teleicu_devices_fe` |
-| 10125 | `care_notifications_fe` |
-
-If two plugins share a port, the second `vite preview` fails to bind and the host silently skips
-that plugin.
+Each additional plugin needs its own available, recorded preview port. Keep `strictPort: true`
+so a conflict fails visibly. On reruns retain the saved values; if an unrelated process takes a
+saved port, resolve that conflict explicitly. Never adopt its server or silently select the next
+port, because the host's remote URL would then point to the wrong process.
 
 Alternative for host-side development: drop the plugin under `care_fe/apps/<name>/` with a
 `src/manifest.tsx`; in dev mode the host auto-discovers it and loads it through its own Vite graph

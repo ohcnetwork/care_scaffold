@@ -179,29 +179,37 @@ the plugin. **That is the bar.**
 
 ## Step 6 — Running it locally
 
+Complete `bootstrap.prompt.md` first to create isolated checkouts and save available ports.
+Generate the plugin with `--port "$PLUGIN_PORT" --api-url "$CARE_API_URL"` after sourcing
+`$WORKSPACE/care-scaffold.env`. Then run:
+
 ```bash
-# backend
-cd care && make up && make migrate && make load-fixtures
-docker exec care_be-backend-1 python install_plugins.py
-docker exec care_be-celery-1  python install_plugins.py     # ← required for notifications
-docker compose restart backend celery
+source "$WORKSPACE/care-scaffold.env"
 
-# livekit
-docker run --rm -p 7880:7880 -v ./livekit.yaml:/livekit.yaml livekit/livekit-server --config /livekit.yaml
+# Backend and dependencies, scoped to this workspace.
+"$WORKSPACE/.agent/compose.sh" up -d --wait --build
+"$WORKSPACE/.agent/compose.sh" exec backend python manage.py migrate
+"$WORKSPACE/.agent/compose.sh" exec backend python manage.py load_fixtures
 
-# plugin frontend
-cd care_connect_fe && npm run dev          # :4173
+# Plugin frontend, in a separate terminal with the saved configuration loaded.
+cd "$WORKSPACE/care_connect_fe"
+npm run dev
 
-# host
-cd care_fe && npm run dev                  # :4000
+# Host, in another terminal with the saved configuration loaded.
+cd "$CARE_FE"
+npm run dev -- --host 127.0.0.1 --port "$CARE_FE_PORT" --strictPort
 ```
 
-`care_fe/.env.local`:
+`$CARE_FE/.env.local` uses the saved `CARE_API_URL` for `REACT_CARE_API_URL` and
+`ohcnetwork/care_connect_fe@localhost:<PLUGIN_PORT>/assets/remoteEntry.js` for
+`REACT_ENABLED_APPS`, substituting the saved numeric plugin port.
 
-```
-REACT_CARE_API_URL=http://127.0.0.1:9000
-REACT_ENABLED_APPS=ohcnetwork/care_connect_fe@localhost:4173/assets/remoteEntry.js
-```
+LiveKit is an optional additional service: the base workspace allocator does not allocate its
+ports. Before starting it, check and record separate available HTTP/WebSocket and media TCP/UDP
+ports, use a workspace-specific container name or Compose service, and configure its advertised
+addresses accordingly. The `7880` URLs earlier are illustrative only. Configure
+`CONNECT_LIVEKIT_URL` for browser access, `CONNECT_LIVEKIT_HOST` for container access, and the
+webhook URL with the saved CARE API port. Follow `care-third-party-services` for network routing.
 
 ### Data prerequisites for the patient flow
 

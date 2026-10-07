@@ -32,7 +32,8 @@ export default defineConfig({
   resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
   preview: {
     port: __PLUGIN_PORT__,
-    host: "0.0.0.0",
+    host: "127.0.0.1",
+    strictPort: true,
     cors: true,
     allowedHosts: true,
   },

@@ -16,12 +16,16 @@ blockers, and the final state.
    you can read their types, extension points and patterns. You modify them only to add a
    **generic** extension point, and only after proving no existing one fits.
 2. **Two new repos, not a fork.** The plugin is `care_<name>` (Django) + `care_<name>_fe` (Vite).
-   Both live *outside* the core checkouts.
+   Both have their own Git history. The backend plugin lives inside the dedicated backend
+   checkout's Docker build context; exclude it from core Git tracking.
 3. **Never commit secrets.** Plugin credentials go in `plug_config.py` configs or environment,
    and `plug_config.py` must not be committed with real keys.
 4. **Ask before destroying.** Dropping databases, `docker compose down -v`, force-pushing:
    confirm with the user first.
-5. **Verify, don't assume.** Every phase has an explicit check. Do not advance past a failing check.
+5. **Isolate the development stack.** Use this workspace's own `care` and `care_fe` checkouts,
+   saved ports, and Compose wrapper. Never adopt, configure, or restart another workspace's
+   services. Reuse only resources recorded for this workspace.
+6. **Verify, don't assume.** Every phase has an explicit check. Do not advance past a failing check.
 
 ---
 
@@ -43,162 +47,173 @@ Ask the user (batch these into one question set, don't drip-feed):
   states, who may move between them, and what capability does each role get? Agents reliably
   invent these; they are product decisions, not technical ones.
 - **Third-party services?** LiveKit, an LLM provider, an SMS gateway, etc.
-- **Preview port** for the plugin frontend. Default 4173; pick another if it is taken (4173,
-  10120, 10125 are used by existing plugins).
 - **Workspace root** — where to put everything. Default: the current directory.
 
 Record the answers in `.agent/plugin-brief.md` in the workspace root. You will re-read it later.
 
 ---
 
-## Phase 1 — Core repositories
+## Phase 1 — Isolated workspace and core repositories
 
-Work in `$WORKSPACE`.
+Use an absolute `$WORKSPACE` path. This bootstrap requires Python 3 and Docker Compose **2.24.4+**.
+The version requirement is for [`!override` port replacement](https://docs.docker.com/reference/compose-file/merge/#replace-value),
+so the upstream published ports are removed, not retained alongside the new ports.
 
-### 1.1 Detect or clone
+### 1.1 Configure and save ports
 
-For each of `care` (backend) and `care_fe` (frontend):
-
-```bash
-# Look for an existing checkout before cloning. Common locations:
-#   $WORKSPACE/care, $WORKSPACE/care_be, ~/care, ~/eGov/care_be, ../care
-```
-
-If a checkout exists, **use it** — do not clone a second copy. Confirm the path with the user.
-Otherwise:
+Use `$WORKSPACE/care-scaffold.env` as the single source for core paths and ports. On first setup,
+optionally copy `<this-repo>/care-scaffold.env.example` there and edit the port values before
+running the helper. Explicit values win; blank or missing port entries are allocated. Do not
+replace an existing workspace configuration with the example.
 
 ```bash
-git clone https://github.com/ohcnetwork/care.git      "$WORKSPACE/care"
-git clone https://github.com/ohcnetwork/care_fe.git   "$WORKSPACE/care_fe"
+python3 <this-repo>/scripts/configure-workspace.py --workspace "$WORKSPACE"
+source "$WORKSPACE/care-scaffold.env"
 ```
 
-> The backend repo is named `care` upstream. Some local checkouts are named `care_be`.
-> Both are the same thing; use whatever exists. Refer to it as `$CARE_BE` from here on.
+The helper checks IPv4 and IPv6 availability, rejects occupied explicit ports on first setup,
+and fills blank or missing ports from a workspace-specific starting point. It saves eight
+distinct ports. `care-scaffold.env` records `CARE_BE`, `CARE_FE`,
+`COMPOSE_PROJECT_NAME`, `CARE_API_URL`, `CARE_FE_URL`, and:
 
-### 1.2 Record the paths
+| Variable | Host service |
+| --- | --- |
+| `CARE_API_PORT` | CARE backend |
+| `CARE_FE_PORT` | CARE frontend |
+| `PLUGIN_PORT` | Plugin preview |
+| `CARE_DB_PORT` | PostgreSQL |
+| `CARE_REDIS_PORT` | Redis |
+| `CARE_S3_PORT` | MinIO API / browser uploads |
+| `CARE_S3_CONSOLE_PORT` | MinIO console |
+| `CARE_DEBUG_PORT` | Backend debugger |
 
-Write `$WORKSPACE/.agent/paths.env`:
+It also generates `.agent/compose.override.yaml` and executable `.agent/compose.sh`. They isolate
+published ports, the network, database/Redis volumes, and the backend/Celery image name. Published
+ports bind to loopback. Internal container ports and service names stay unchanged.
+
+Rerunning the helper preserves saved assignments, including when this stack is running. Before
+a cold start, with this workspace's services stopped, check availability without changing files:
 
 ```bash
-CARE_BE=/abs/path/to/care
-CARE_FE=/abs/path/to/care_fe
-PLUGIN_BE=/abs/path/to/care_<name>
-PLUGIN_FE=/abs/path/to/care_<name>_fe
+python3 <this-repo>/scripts/configure-workspace.py --workspace "$WORKSPACE" --check-ports
 ```
 
-**Check:** both core paths exist and contain `plug_config.py` / `src/pluginTypes.ts` respectively.
+Availability checks cannot reserve ports until startup: if another process later takes a saved
+port, startup must fail. Identify the owner; never kill or adopt it or silently choose a new
+port. For a deliberate reassignment, stop this workspace, edit `care-scaffold.env`, rerun the
+helper to refresh derived URLs, source `care-scaffold.env` again, then update the frontend API
+URL, plugin configuration, and federation registration together before restarting.
+
+If an older workspace has only `.agent/stack.env`, the helper migrates its values to
+`care-scaffold.env` and removes the old file only after a successful write. If both files exist,
+resolve the duplicate configuration explicitly before proceeding; the helper will not choose
+between them.
+
+### 1.2 Clone dedicated core checkouts
+
+`CARE_BE` is always `$WORKSPACE/care`; `CARE_FE` is always `$WORKSPACE/care_fe`.
+Clone missing repositories:
+
+```bash
+git clone https://github.com/ohcnetwork/care.git "$CARE_BE"
+git clone https://github.com/ohcnetwork/care_fe.git "$CARE_FE"
+```
+
+On reruns, reuse these directories only after confirming they are this workspace's checkouts
+with the expected Git remotes and files. Do not search `~/git`, siblings, or other workspaces for
+reusable installations, and do not symlink these paths to another checkout. If either directory
+predates this bootstrap and ownership is unclear, choose a fresh workspace before proceeding.
+
+**Check:** both paths are real directories under `$WORKSPACE`, with `plug_config.py` and
+`src/pluginTypes.ts` respectively. Inspect the cloned Compose files for additional services,
+fixed container names, external volumes, or host bind mounts that would escape isolation; adapt
+only this workspace's override if upstream has changed.
+
+### 1.3 Record plugin paths
+
+Write `$WORKSPACE/.agent/paths.env` with only the absolute paths for `PLUGIN_BE` and `PLUGIN_FE`.
+Keep core paths and ports only in `care-scaffold.env`; source both files in future sessions.
+Initially the generator creates plugins at `$WORKSPACE/care_<name>` and
+`$WORKSPACE/care_<name>_fe`. Update `PLUGIN_BE` after moving it into the dedicated backend in 6.1.
+
+Do not commit `care-scaffold.env` or `.agent/` (add both to the workspace's ignore rules if needed).
 
 ---
 
 ## Phase 2 — Backend up
 
-### 2.0 Detect what is ALREADY running — do this first, always
-
-**Never start a second backend.** If one is up, adopt it.
+### 2.0 Verify the isolated configuration
 
 ```bash
-# Is a compose project already running?
-docker compose ls
-docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}'
-
-# Is anything answering on the API port?
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9000/api/v1/plug_config/
-lsof -nP -iTCP:9000 -sTCP:LISTEN
+"$WORKSPACE/.agent/compose.sh" config
+"$WORKSPACE/.agent/compose.sh" ps
 ```
 
-Decide from the result:
+Before starting, verify the rendered config: every published host port matches `care-scaffold.env`,
+the project/network/image/volume names are workspace-specific, and bind mounts refer to this
+workspace. Confirm browser-facing S3 endpoints use `CARE_S3_PORT`; internal requests still use
+`http://minio:9000`. Existing services on 9000, 4000, 5433, 6380, 9100, or 9001 belong to other
+stacks and are left alone. Only reuse containers belonging to the saved project and checkout.
 
-| Observation | Action |
-| --- | --- |
-| A compose project (e.g. `care_be`) is `running` | **Adopt it.** Skip to 2.2. Use its directory as `$CARE_BE`. |
-| Port 9000 answers but no compose project | A local venv/runserver is already up. **Adopt it.** Do not start Docker. |
-| Port 9000 answers from an unrelated process | Stop and ask the user. Do not kill it yourself. |
-| Nothing is running | Proceed to 2.1 and pick a mode. |
+**Use `.agent/compose.sh` for every operation.** Plain `make` targets and bare `docker compose`
+commands can omit the override and return to shared ports or resources.
 
-Record the chosen mode (`docker` or `venv`) in `.agent/paths.env` as `CARE_BE_MODE`. Every later
-phase must respect it. **Mixing modes corrupts state** — a venv `manage.py` run against the
-Docker Postgres uses different ports and settings and will produce confusing migration errors.
-
-Also note the real ports — this stack does **not** use defaults. Read them from `docker ps`
-rather than assuming (a typical local setup exposes Postgres on **5433** and Redis on **6380**
-to avoid colliding with host installs).
-
-### 2.1 Start it (only if nothing is running)
-
-**Docker (preferred):**
+### 2.1 Start and seed
 
 ```bash
-cd "$CARE_BE"
-make up          # docker compose -f docker-compose.yaml -f docker-compose.local.yaml up -d --wait
+"$WORKSPACE/.agent/compose.sh" up -d --build --wait
+"$WORKSPACE/.agent/compose.sh" exec backend python manage.py migrate
+# First setup only; do not reload fixtures into an existing populated workspace.
+"$WORKSPACE/.agent/compose.sh" exec backend python manage.py load_fixtures
 ```
 
-**Local venv (only if the user has no Docker or explicitly asks):**
+If Docker is unavailable, stop and report the requirement. Do not fall back to the user's host
+PostgreSQL/Redis or an existing venv backend. An explicitly requested venv setup must preserve
+these same checkout, database, storage, and port boundaries.
 
-```bash
-cd "$CARE_BE"
-pg_isready   || sudo pg_ctlcluster 16 main start
-redis-cli ping || redis-server --daemonize yes
-
-python3.13 -m venv .venv && .venv/bin/pip install pipenv && .venv/bin/pipenv install --dev
-DJANGO_SETTINGS_MODULE=config.settings.local DJANGO_READ_DOT_ENV_FILE=true \
-  .venv/bin/python manage.py runserver 0.0.0.0:9000
-```
-
-### 2.2 Migrate and seed (safe on an already-running stack)
-
-```bash
-# docker mode
-make migrate && make load-fixtures
-
-# venv mode
-DJANGO_SETTINGS_MODULE=config.settings.local DJANGO_READ_DOT_ENV_FILE=true \
-  .venv/bin/python manage.py migrate
-```
-
-> ⚠️ **Never run `make teardown`.** It is `docker compose down -v`, which deletes the volumes —
-> the entire database, including any data the user cares about. `make down` is the safe stop.
-> If you think you need `teardown`, ask first.
+> Never use `down -v` or `make teardown` without approval: these delete database volumes.
+> `"$WORKSPACE/.agent/compose.sh" down` stops only this workspace and preserves named volumes.
 
 ### Fixture credentials (all password `Ohcn@123`)
 
 `care-doctor`, `care-admin`, `care-nurse`, `care-staff`, `care-volunteer`, `care-fac-admin`,
 `care-role-admin`, `care-role-manager`, `care-role-member`.
 
-**Check:** `curl -s http://localhost:9000/api/v1/plug_config/ | head -c 200` returns JSON
-(401 is fine — it means the server is up).
+**Check:** `curl -s "$CARE_API_URL/api/v1/plug_config/"` returns JSON
+(401 is fine — it means the server is up). Confirm `compose.sh ps` shows only the saved ports.
 
 ---
 
 ## Phase 3 — Frontend up
 
-### 3.0 Detect first
+### 3.0 Detect only this workspace's server
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:4000
-lsof -nP -iTCP:4000 -sTCP:LISTEN
+lsof -nP -iTCP:"$CARE_FE_PORT" -sTCP:LISTEN
 ```
 
-If the host dev server is already running, **adopt it**. Do not start a second one — Vite will
-silently bind a different port (4001), the plugin's `REACT_ENABLED_APPS` will not match what you
-are looking at in the browser, and you will debug the wrong instance for an hour.
+If occupied, inspect the listener's working directory and arguments. Reuse it only if it is
+`$CARE_FE` on the saved port with the correct API URL. A listener from another workspace is a
+conflict to resolve, not a server to adopt. Restart only this workspace's server after env edits.
 
-You will still need to **restart** it later if you change `.env.local` (see 6.2). Restarting a
-server you adopted is fine; ask the user first if they started it themselves in another terminal.
+### 3.1 Configure and start
 
-### 3.1 Start it (only if nothing is running)
+In `$CARE_FE/.env.local`, set exactly one `REACT_CARE_API_URL` entry to the saved `CARE_API_URL`.
+Update any old value rather than appending a duplicate or retaining a default URL. Preserve other
+settings. Verify local backend CORS/CSRF settings allow `CARE_FE_URL` if the checked-out version
+restricts them; make any needed development override only for this workspace.
 
 ```bash
 cd "$CARE_FE"
 npm install --ignore-scripts && npm run postinstall
-grep -q REACT_CARE_API_URL .env.local 2>/dev/null \
-  || printf 'REACT_CARE_API_URL=http://127.0.0.1:9000\n' >> .env.local
-npm run dev     # http://localhost:4000
+npm run dev -- --host 127.0.0.1 --port "$CARE_FE_PORT" --strictPort
 ```
 
-**Check:** the login page renders at http://localhost:4000 and you can sign in as
-`care-admin` / `Ohcn@123`.
+**Check:** the login page renders at `$CARE_FE_URL`, its network requests use `$CARE_API_URL`, and
+you can sign in as `care-admin` / `Ohcn@123`. `--strictPort` prevents an unexpected port change.
 
-> `.env.local` changes are **not** hot-reloaded. Restart `npm run dev` after every edit to it.
+> `.env.local` changes are **not** hot-reloaded. Restart this workspace's server with the same
+> explicit port arguments after every edit.
 
 ---
 
@@ -227,7 +242,9 @@ future session re-orients itself without re-running this prompt.
   --name connect \
   --title "Care Connect" \
   --description "Teleconsultation for CARE" \
-  --out "$WORKSPACE"
+  --out "$WORKSPACE" \
+  --port "$PLUGIN_PORT" \
+  --api-url "$CARE_API_URL"
 ```
 
 This materialises:
@@ -247,7 +264,7 @@ grep -rn '__PLUGIN_\|__I18N_PREFIX__' "$WORKSPACE/care_connect" "$WORKSPACE/care
 
 ## Phase 6 — Wire into core
 
-This is the **only** phase that touches core, and it should be a handful of lines.
+This phase wires the plugin into the dedicated core checkouts. Keep the changes to a handful of lines.
 
 ### 6.1 Backend registration — `$CARE_BE/plug_config.py`
 
@@ -278,63 +295,49 @@ mv "$PLUGIN_BE" "$CARE_BE/care_connect"       # or: git clone straight into $CAR
 > `install_plugins.py` fails or silently installs nothing. Keep the plugin repo as a real
 > directory inside `$CARE_BE` and give it its own git remote.
 
-Then install it, according to `CARE_BE_MODE`:
+Update `PLUGIN_BE` in `.agent/paths.env` to the new path and exclude this nested plugin repo
+from the dedicated core checkout's Git tracking.
 
-#### Docker mode — rebuild the image
-
-`dev.Dockerfile` runs `install_plugins.py` **at image build time**, into `/.venv`, which is baked
-into the image. Only the source tree is bind-mounted, not the virtualenv. So a newly registered
-plug does not exist until the image is rebuilt:
-
-```bash
-cd "$CARE_BE"
-make down        # safe stop. NOT `make teardown` — that deletes the database volume.
-make build       # re-runs install_plugins.py inside the image
-make up
-```
-
-`backend` and `celery` share the same `care_local` image, so one rebuild fixes both.
-
-> **Fast iteration only:** while actively editing plugin code you can skip the rebuild with
-> `docker exec <container> python install_plugins.py`. But `docker exec` writes to that *one
-> container's* writable layer, so you must run it against **both** `backend` and `celery` and
-> restart them. It is a temporary patch — the change is lost on recreate. Rebuild is canonical.
-
-#### venv mode
+Rebuild the workspace image: `dev.Dockerfile` installs plugins **at image build time** into
+`/.venv`, and only the source tree is bind-mounted. Both backend and Celery must use the rebuilt
+workspace-specific image.
 
 ```bash
-.venv/bin/python install_plugins.py
+"$WORKSPACE/.agent/compose.sh" up -d --build --wait
+"$WORKSPACE/.agent/compose.sh" exec backend python manage.py makemigrations care_connect
+"$WORKSPACE/.agent/compose.sh" exec backend python manage.py migrate
 ```
 
-Then migrate:
-
-```bash
-make makemigrations && make migrate
-```
-
-**Check:** `curl -s http://localhost:9000/api/care_connect/config/` returns something other
-than 404.
+**Check:** `curl -s "$CARE_API_URL/api/care_connect/config/"` returns something other than 404.
 
 ### 6.2 Frontend registration — `$CARE_FE/.env.local`
 
-```bash
-REACT_ENABLED_APPS=ohcnetwork/care_connect_fe@localhost:4173/assets/remoteEntry.js
-```
-
-Append to any existing value (comma-separated) rather than overwriting — other plugins may
-already be enabled.
-
-Start the plugin's dev server, after checking the port is free:
+Set this entry using the **numeric value** saved as `PLUGIN_PORT` (substitute it when writing the
+file, do not leave a shell variable reference in `.env.local`):
 
 ```bash
-lsof -nP -iTCP:4173 -sTCP:LISTEN     # if taken, pick another port and update vite.config.ts
-cd "$PLUGIN_FE" && npm install && npm run dev    # vite preview :4173 + vite build --watch
+REACT_ENABLED_APPS=ohcnetwork/care_connect_fe@localhost:${PLUGIN_PORT}/assets/remoteEntry.js
 ```
 
-Restart the `care_fe` dev server so it picks up `.env.local` — restart the existing one, do not
-start a second.
+Append to any existing value (comma-separated) rather than overwriting — other plugins in this
+workspace may already be enabled. The generator has also written the selected preview port and
+standalone API URL into the plugin template.
 
-**Check:** browser console shows no `There was an error enabling the app care_connect_fe`, and
+```bash
+lsof -nP -iTCP:"$PLUGIN_PORT" -sTCP:LISTEN
+cd "$PLUGIN_FE" && npm install && npm run dev
+```
+
+Reuse a listener only after verifying it belongs to `$PLUGIN_FE`. The plugin uses `strictPort`;
+if a foreign process owns the port, resolve the conflict explicitly and keep registration and
+preview configuration aligned. For additional plugins, allocate separate available ports; do
+not give every plugin the workspace's first `PLUGIN_PORT`.
+
+Restart only `$CARE_FE` with `--host 127.0.0.1 --port "$CARE_FE_PORT" --strictPort` so it picks up
+`.env.local`. Hard-reload the browser after rebuilding the plugin.
+
+**Check:** the remote is served at `http://localhost:$PLUGIN_PORT/assets/remoteEntry.js`, the
+browser console has no `There was an error enabling the app care_connect_fe`, and
 `window.__CARE_PLUGIN_RUNTIME__.meta` contains your slug.
 
 ### 6.3 Extension points — only if needed
@@ -397,5 +400,6 @@ Produce a short summary containing:
 - The exact list of core files touched, with a one-line justification each.
 - The API surface added, as a route table.
 - The extension points consumed.
-- How to run everything again from cold (`make up`, two `npm run dev`s, ports).
+- Saved stack configuration, every assigned host port, and exact commands to restart this workspace
+  (`.agent/compose.sh`, host Vite with explicit port and `--strictPort`, plugin `npm run dev`).
 - Anything you could not do without further core changes.

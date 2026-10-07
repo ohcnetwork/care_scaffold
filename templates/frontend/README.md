@@ -9,7 +9,7 @@ Module Federation. It is a separate build; it never imports from `care_fe`.
 
 ```bash
 npm install
-npm run dev        # vite preview :__PLUGIN_PORT__  +  vite build --watch
+npm run dev        # initial build, then preview :__PLUGIN_PORT__ + build watcher
 ```
 
 Enable it in `care_fe/.env.local`:
@@ -19,6 +19,15 @@ REACT_ENABLED_APPS=ohcnetwork/__PLUGIN_FE__@localhost:__PLUGIN_PORT__/assets/rem
 ```
 
 Then restart the `care_fe` dev server — `.env.local` is not hot-reloaded.
+
+The preview binds only to localhost and requires port **__PLUGIN_PORT__**. If another
+service takes that port, startup fails instead of silently changing the remote URL.
+The standalone harness uses `__PLUGIN_API_URL__`; inside CARE the host supplies its API URL.
+
+When generating into a configured workspace, `new-plugin.sh` reads `care-scaffold.env`
+for its API URL and first plugin port. Later plugins receive another available port if
+that port is already recorded in a sibling plugin. `--port` and `--api-url` override
+these defaults; generated settings stay in this plugin until you edit them.
 
 > There is no HMR across the federation boundary. After the plugin rebuilds, **hard-reload**
 > `care_fe`.

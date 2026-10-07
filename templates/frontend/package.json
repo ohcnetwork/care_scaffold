@@ -6,7 +6,7 @@
   "description": "__PLUGIN_DESCRIPTION__",
   "license": "MIT",
   "scripts": {
-    "dev": "vite preview & vite build --watch",
+    "dev": "node dev.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint ."

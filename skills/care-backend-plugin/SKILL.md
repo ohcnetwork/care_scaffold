@@ -228,7 +228,15 @@ registers, and fails silently.
 
 ## Installing during development
 
-The plugin must live as a **real directory inside the backend checkout**:
+Run the isolated bootstrap first and load its saved configuration:
+
+```bash
+source "$WORKSPACE/care-scaffold.env"
+```
+
+`CARE_BE` must refer to `$WORKSPACE/care`, never another development checkout. All backend
+commands use the generated Compose wrapper so the project, images, volumes and host ports stay
+isolated. The plugin must live as a **real directory inside that backend checkout**:
 
 ```bash
 mv /path/to/care_connect "$CARE_BE/care_connect"    # or clone directly into $CARE_BE
@@ -253,16 +261,13 @@ The virtualenv lives at `/.venv` **inside the image**. Compose bind-mounts only 
 until the image is rebuilt:
 
 ```bash
-cd "$CARE_BE"
-make down      # safe stop
-make build     # re-runs install_plugins.py
-make up
+"$WORKSPACE/.agent/compose.sh" up -d --wait --build
 ```
 
-`backend` and `celery` share one `care_local` image, so a single rebuild covers both.
+`backend` and `celery` share this workspace's image, so a single rebuild covers both.
 
-> ⚠️ **Never `make teardown`.** That is `docker compose down -v` — it deletes the volumes and with
-> them the entire database. `make down` is the safe stop.
+> Use `"$WORKSPACE/.agent/compose.sh" down` to stop the stack without removing data.
+> Never add `-v`: that deletes the volumes and their database contents.
 
 `ADDITIONAL_PLUGS` is a Docker **build arg**, so changing it also requires a rebuild.
 
@@ -271,12 +276,12 @@ make up
 While actively editing plugin code, skip the rebuild:
 
 ```bash
-docker exec care_be-backend-1 python install_plugins.py
-docker exec care_be-celery-1  python install_plugins.py
-docker compose restart backend celery
+"$WORKSPACE/.agent/compose.sh" exec backend python install_plugins.py
+"$WORKSPACE/.agent/compose.sh" exec celery python install_plugins.py
+"$WORKSPACE/.agent/compose.sh" restart backend celery
 ```
 
-`docker exec` writes to a **single container's writable layer**, not the shared image — which is
+Installing inside a running container writes to a **single container's writable layer**, not the shared image — which is
 why you must run it against both containers, and why the change vanishes when a container is
 recreated. Treat it as a patch; rebuild before you trust a result.
 
@@ -286,14 +291,8 @@ Symptom: your backend change works, but the same code behaves like an older vers
 tasks — with **no import error**. It silently runs stale code.
 
 ```bash
-docker exec <container> python -c "import care_connect; print(care_connect.__file__)"
-docker exec <container> pip show care_connect     # want 0.1.0-0.editable, not a frozen version
-```
-
-### venv
-
-```bash
-.venv/bin/python install_plugins.py
+"$WORKSPACE/.agent/compose.sh" exec backend python -c "import care_connect; print(care_connect.__file__)"
+"$WORKSPACE/.agent/compose.sh" exec celery pip show care_connect     # want 0.1.0-0.editable, not a frozen version
 ```
 
 ## Checklist before you call the backend done
@@ -304,4 +303,4 @@ docker exec <container> pip show care_connect     # want 0.1.0-0.editable, not a
 - [ ] Core diff is `plug_config.py` only.
 - [ ] Secrets come from `configs`/env, and no real key is committed.
 - [ ] Plugin is a real directory inside `$CARE_BE`, not a symlink.
-- [ ] Image rebuilt (`make down && make build && make up`) after registering the plug.
+- [ ] Workspace image rebuilt through `.agent/compose.sh up -d --wait --build` after registering the plug.
