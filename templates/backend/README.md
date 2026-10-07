@@ -8,11 +8,13 @@ to this package.
 
 ## Install (local development)
 
-Place the plugin inside the backend checkout as a **real directory**. A symlink breaks
+Run the `care_scaffold` bootstrap and load this workspace's saved settings first.
+Place the plugin inside its dedicated backend checkout as a **real directory**. A symlink breaks
 `docker build`, which cannot follow links out of the build context.
 
 ```bash
-mv /path/to/__PLUGIN_SNAKE__ $CARE_BE/__PLUGIN_SNAKE__
+source "$WORKSPACE/care-scaffold.env"
+mv /path/to/__PLUGIN_SNAKE__ "$CARE_BE/__PLUGIN_SNAKE__"
 ```
 
 `care/plug_config.py`:
@@ -33,14 +35,14 @@ plugs = [__PLUGIN_SNAKE__, ...]
 Plugins are pip-installed at **image build time**, so a newly registered plug needs a rebuild:
 
 ```bash
-cd $CARE_BE
-make down      # safe stop. NOT `make teardown` — that deletes the database volume.
-make build     # re-runs install_plugins.py
-make up
-make makemigrations && make migrate
+"$WORKSPACE/.agent/compose.sh" up -d --wait --build
+"$WORKSPACE/.agent/compose.sh" exec backend python manage.py makemigrations __PLUGIN_SNAKE__
+"$WORKSPACE/.agent/compose.sh" exec backend python manage.py migrate
 ```
 
-`backend` and `celery` share one image, so a single rebuild covers both.
+`backend` and `celery` share this workspace's image, so a single rebuild covers both.
+Use `.agent/compose.sh` for every backend command to preserve its isolated project and ports.
+To stop safely, run `"$WORKSPACE/.agent/compose.sh" down` without `-v`.
 
 ## API
 

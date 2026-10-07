@@ -210,9 +210,16 @@ Non-obvious requirements:
 
 ### Reaching localhost in development
 
-The provider must reach your backend. Options: run the service in the same Docker network
-(`http://host.docker.internal:9000`), or tunnel with `cloudflared` / `ngrok` and point the
-provider's webhook config at the tunnel URL. Note that a tunnel URL changes on restart.
+The provider must reach this workspace's backend. A service on the same Compose network can
+use the backend service name and its internal port (`http://backend:9000`). A container outside
+that network needs a reachable host address and the saved `CARE_API_PORT`; do not assume it can
+reach a loopback-only published port. For an external provider, tunnel the saved `CARE_API_URL`
+with `cloudflared` / `ngrok` and use the resulting webhook URL. A tunnel URL may change on restart.
+
+Optional services such as LiveKit need their own checked and recorded ports, including any UDP
+media ports. They are outside the base workspace allocator. Use workspace-specific container
+names/networks, and configure browser, server and webhook URLs consistently; examples using
+`7880` above illustrate routing, not a reserved host port.
 
 ## Leg 4 — outbound calls
 

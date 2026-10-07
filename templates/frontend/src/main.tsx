@@ -8,7 +8,7 @@ import ExamplePage from "./pages/ExamplePage";
  * The host only ever imports `./manifest`. This exists so `vite preview` serves something
  * and so the plugin can be developed in isolation.
  */
-window.CARE_API_URL ??= "http://127.0.0.1:9000";
+window.CARE_API_URL ??= "__PLUGIN_API_URL__";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

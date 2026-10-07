@@ -11,6 +11,13 @@ Its job is to teach you how to build a *separate* plugin repo pair.
 
 Execute [`bootstrap.prompt.md`](bootstrap.prompt.md). It is self-contained and idempotent.
 
+Each workspace uses dedicated `care` and `care_fe` checkouts and ports saved in
+`care-scaffold.env` by `scripts/configure-workspace.py`. Optional explicit ports go in that file
+first (copy `care-scaffold.env.example`); blank or missing ports are allocated and saved. Use
+`.agent/compose.sh` for backend
+operations and explicit `--port` / `--strictPort` for the host frontend. Never adopt or restart
+another workspace's services, and never use core `make` targets that omit the isolated override.
+
 ## If the user is already mid-build
 
 Load the relevant skill(s) from `skills/` on demand:
@@ -48,6 +55,7 @@ Template files use literal placeholder tokens, substituted by `scripts/new-plugi
 | `__I18N_PREFIX__` | `connect__` | i18n key prefix |
 | `__PLUGIN_ROUTE__` | `connect` | URL segment for plugin routes |
 | `__PLUGIN_CONTAINER__` | `care-connect-container` | Tailwind scoping class |
-| `__PLUGIN_PORT__` | `4173` | Vite preview port for the remote |
+| `__PLUGIN_PORT__` | `18473` | Allocated Vite preview port for the remote |
+| `__PLUGIN_API_URL__` | `http://localhost:18470` | Standalone preview API URL (host injects its own when federated) |
 
 Never ship a file with an unsubstituted `__…__` token.
