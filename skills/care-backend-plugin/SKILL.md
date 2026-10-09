@@ -12,8 +12,14 @@ A backend plugin is an ordinary pip-installable Django app. Core discovers it th
 
 ```python
 # care/plug_config.py  — the ONLY core file you edit
+import sys
+from pathlib import Path
+
 from plugs.manager import PlugManager
 from plugs.plug import Plug
+
+# Prevent namespace package shadowing.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "care_connect"))
 
 care_connect = Plug(
     name="care_connect",          # Django app label → INSTALLED_APPS entry

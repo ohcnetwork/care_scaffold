@@ -115,4 +115,35 @@ export async function preview() {
         assert result.returncode != 0 and "EADDRINUSE" in result.stderr
         assert "watch started" not in result.stdout
 
+    # Issue #7 regression: outer repository directory shadowing as a namespace package
+
+    # 1. Unfixed
+    shadow_test = f"""
+import sys
+sys.path.insert(0, '{output}')
+import care_first
+assert not hasattr(care_first, '__file__') or care_first.__file__ is None
+assert len(care_first.__path__) == 1
+assert 'care_first/care_first' not in list(care_first.__path__)[0]
+"""
+    subprocess.run(["python3", "-c", shadow_test], check=True)
+
+    # 2. Fixed
+    fixed_test = f"""
+import sys
+from pathlib import Path
+plug_config_file = Path('{output / "plug_config.py"}')
+sys.path.insert(0, str(plug_config_file.resolve().parent / "care_first"))
+sys.path.insert(1, '{output}')
+
+import care_first
+import care_first.models
+
+assert care_first.__file__ is not None
+assert len(care_first.__path__) == 1
+assert list(care_first.__path__)[0].endswith('care_first/care_first')
+assert care_first.models.__file__.endswith('care_first/care_first/models/__init__.py')
+"""
+    subprocess.run(["python3", "-c", fixed_test], check=True)
+
 print("Generator, workspace defaults/overrides, URL escaping, distinct ports, occupied-port rejection, and dev startup checks passed.")
