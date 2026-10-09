@@ -86,8 +86,8 @@ with tempfile.TemporaryDirectory(prefix="care scaffold test ") as temporary:
         result = generate(configured, "occupied_default", succeeds=False)
         assert "already in use" in result.stderr
 
-        # Exercise the actual dev runner without downloading Vite: preview's
-        # bind failure must reach npm, without leaving a watcher alive.
+        # Exercise the actual dev runner without downloading Vite.
+        # This confirms watcher closes on failure, signals are handled, and preview starts correctly.
         vite = frontend / "node_modules/vite"
         vite.mkdir(parents=True)
         (vite / "package.json").write_text(json.dumps({"type": "module", "exports": "./index.mjs"}))
@@ -96,23 +96,66 @@ import { createServer } from "node:net";
 export async function build(options) {
   if (options?.build?.watch) {
     console.log("watch started");
-    setInterval(() => {}, 1000);
+    const interval = setInterval(() => {}, 1000);
+    return {
+      on(event, callback) {
+        if (event === "event") {
+          setTimeout(() => {
+            console.log("emitting ERROR");
+            callback({ code: "ERROR" });
+            setTimeout(() => {
+              console.log("emitting END 1");
+              callback({ code: "END" });
+              setTimeout(() => {
+                console.log("emitting END 2");
+                callback({ code: "END" });
+                setTimeout(() => process.kill(process.pid, 'SIGINT'), 20);
+              }, 20);
+            }, 20);
+          }, 20);
+        }
+      },
+      async close() {
+        console.log("watch closed");
+        clearInterval(interval);
+      }
+    };
   }
 }
 export async function preview() {
   return await new Promise((resolve, reject) => {
     const server = createServer();
     server.once("error", reject);
-    server.listen(Number(process.env.TEST_PORT), "127.0.0.1", () => resolve(server));
+    server.listen(Number(process.env.TEST_PORT), "127.0.0.1", () => {
+      console.log("preview started");
+      resolve({ httpServer: server });
+    });
   });
 }
 """)
+        # 1. Occupied port -> binds fail, error propagates, watcher closes.
         result = subprocess.run(
             ["node", "dev.mjs"], cwd=frontend,
             env={**os.environ, "TEST_PORT": port},
             capture_output=True, text=True, timeout=5,
         )
         assert result.returncode != 0 and "EADDRINUSE" in result.stderr
-        assert "watch started" not in result.stdout
+        assert "watch closed" in result.stdout
+
+    # 2. Free port -> skips ERROR, starts preview on END 1, ignores END 2, cleans up on SIGINT.
+    with socket.socket() as free_sock:
+        free_sock.bind(("127.0.0.1", 0))
+        free_port = str(free_sock.getsockname()[1])
+    result2 = subprocess.run(
+        ["node", "dev.mjs"], cwd=frontend,
+        env={**os.environ, "TEST_PORT": free_port},
+        capture_output=True, text=True, timeout=5,
+    )
+    assert result2.returncode == 0
+    assert "emitting ERROR" in result2.stdout
+    assert "emitting END 1" in result2.stdout
+    assert result2.stdout.count("preview started") == 1
+    assert "emitting END 2" in result2.stdout
+    assert "watch closed" in result2.stdout
 
 print("Generator, workspace defaults/overrides, URL escaping, distinct ports, occupied-port rejection, and dev startup checks passed.")
