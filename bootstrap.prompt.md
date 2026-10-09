@@ -271,6 +271,12 @@ This phase wires the plugin into the dedicated core checkouts. Keep the changes 
 Append a `Plug` and add it to the `plugs` list:
 
 ```python
+import sys
+from pathlib import Path
+
+# Prevent namespace package shadowing.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "care_connect"))
+
 care_connect = Plug(
     name="care_connect",
     package_name="care_connect",   # local dir for dev; git+https://… for deploys
