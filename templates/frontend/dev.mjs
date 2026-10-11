@@ -1,18 +1,45 @@
 import { build, preview } from "vite";
 
-// Complete the first build before serving it. A busy preview port fails here,
-// before the long-running watcher starts, so npm reports the startup failure.
-await build();
-const server = await preview();
-const watcher = await build({ build: { watch: {} } }).catch((error) => {
-  server.httpServer.close();
-  throw error;
-});
+const watcher = await build({ build: { watch: {} } });
+let server;
+let exiting = false;
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, async () => {
-    await watcher.close();
-    server.httpServer.close();
-    process.exit(0);
+  process.on(signal, async () => {
+    if (exiting) return;
+    exiting = true;
+    setTimeout(() => process.exit(1), 5000).unref();
+
+    try {
+      await watcher.close();
+      if (server) {
+        await new Promise((resolve) => server.httpServer.close(resolve));
+      }
+    } catch (error) {
+      console.error(error);
+      process.exit(1);
+    }
   });
 }
+
+let starting = false;
+// Wait for the first successful watch build before starting the preview server.
+// If preview startup fails (e.g. port in use), reject to crash the dev runner.
+await new Promise((resolve, reject) => {
+  watcher.on("event", async (event) => {
+    if (event.code === "END" && !starting) {
+      starting = true;
+      try {
+        server = await preview();
+        resolve();
+      } catch (error) {
+        try {
+          await watcher.close();
+        } catch (cleanupError) {
+          console.error("Watcher cleanup failed:", cleanupError);
+        }
+        reject(error);
+      }
+    }
+  });
+});
