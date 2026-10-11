@@ -247,10 +247,11 @@ def close_room(room_name: str) -> None:
 
 - Declare credentials in `REQUIRED_SETTINGS` so a misconfigured deploy fails loudly at boot
   rather than at the first user's click.
-- Supply them via `Plug(configs={...})` or environment variables — production should prefer env
-  / `ADDITIONAL_PLUGS`.
-- **Never commit a real key.** `plug_config.py` lives in the core repo; a key committed there is
-  a key leaked to everyone with repo access. Commit placeholders only.
+- Supply them via environment variables or `Plug(configs={...})` in the external runtime
+  configuration from `bootstrap.prompt.md`; production should prefer env / `ADDITIONAL_PLUGS`.
+  Do not edit core's `plug_config.py` or other files in the core checkouts.
+- **Never commit a real key.** Keep secrets in untracked runtime configuration or the deployment's
+  secret store. Commit placeholders only.
 - Never log a secret, and never echo one back through `config/`.
 
 ## Frontend side

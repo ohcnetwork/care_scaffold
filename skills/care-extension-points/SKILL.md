@@ -1,6 +1,6 @@
 ---
 name: care-extension-points
-description: The catalog of care_fe plugin extension points (SupportedPluginComponents), where each one renders in the host, how to choose one, the component-override mechanism, and the exact procedure for adding a new generic extension point to core when none fits. Use when deciding where plugin UI attaches or when a core UI change seems necessary.
+description: The catalog of care_fe plugin extension points (SupportedPluginComponents), where each one renders in the host, how to choose one, the component-override mechanism, and how to report unsupported UI requirements without changing core. Use when deciding where plugin UI attaches or when the available host surfaces do not fit.
 ---
 
 # CARE Frontend Extension Points
@@ -9,13 +9,14 @@ An extension point is a named slot in `care_fe` where any plugin can inject a co
 Core renders `<PLUGIN_Component __name="X" {...props} />`; every loaded plugin that declares
 `components.X` in its manifest gets rendered there, each wrapped in its own error boundary.
 
-**Using an existing extension point costs zero core changes.** Exhaust this catalog before
-considering a core edit.
+**Use existing extension points only.** The `care` and `care_fe` checkouts are read-only during
+plugin development. A missing hook is a scaffold blocker, not permission to edit core.
 
 ## Catalog
 
-Names, props and render sites are defined in `care_fe/src/pluginTypes.ts`
-(`SupportedPluginComponents`). Verify against that file — it moves.
+This catalog is a reference snapshot. Names, props and render sites are defined in the checked-out
+`care_fe/src/pluginTypes.ts` (`SupportedPluginComponents`) and its host components. Inspect those
+files read-only to verify availability; a catalog entry does not guarantee support in that revision.
 
 ### Appointments & scheduling
 
@@ -24,7 +25,7 @@ Names, props and render sites are defined in `care_fe/src/pluginTypes.ts`
 | `AppointmentActions` | `appointment: AppointmentRead`, `facilityId`, `className?` | `pages/Appointments/AppointmentDetail.tsx` — staff quick-actions grid |
 | `AppointmentCardActions` | `appointment: Appointment \| PublicAppointment`, `patientId`, `className?` | `pages/Appointments/BookAppointment/BookingsList.tsx`, `pages/Patient/index.tsx` — patient-facing booking cards |
 | `ScheduleAvailabilityActions` | `availability`, `scheduleId`, `facilityId`, `resourceType`, `resourceId` | `pages/Scheduling/components/EditScheduleTemplateSheet.tsx` — availability editor |
-| `AppointmentSlotGroupHeader` | `availability: TokenSlot["availability"]`, `className?` | `pages/Appointments/BookAppointment/AppointmentSlotPicker.tsx` **and** `pages/PublicAppointments/Schedule.tsx` — two separate components; patch both or the badge is missing on the patient side |
+| `AppointmentSlotGroupHeader` | `availability: TokenSlot["availability"]`, `className?` | `pages/Appointments/BookAppointment/AppointmentSlotPicker.tsx` **and** `pages/PublicAppointments/Schedule.tsx` — verify both render sites; staff support alone does not establish patient support |
 
 ### Patient
 
@@ -82,14 +83,14 @@ Names, props and render sites are defined in `care_fe/src/pluginTypes.ts`
 2. **Does it belong next to an existing object?** → find that object's page in the table above.
 3. **Is it global/ambient?** → `AppShellOverlay`.
 4. **Does it need to *replace* core UI rather than sit beside it?** → `overrides`.
-5. **None of the above?** → add one, below.
+5. **None of the above?** → report the blocker below and defer the affected feature.
 
 ## Overrides
 
 ```ts
 overrides: [
   {
-    component: "SomeRegisteredKey",     // must be registered in core via register()
+    component: "SomeRegisteredKey",     // must already be registered in core via register()
     replacement: lazy(() => import("./components/MyReplacement")),
     condition: /* OverrideCondition */,
     priority: 10,                        // higher wins
@@ -101,69 +102,44 @@ overrides: [
 `PluginEngine` calls `addOverride(...)` for each and cleans up on unmount. Use sparingly: an
 override silently changes core behaviour for every user of the deployment.
 
-## Adding a new extension point to core
+## Implementing an existing extension point
 
-Only when nothing above fits. Keep it **generic** — a reviewer must be able to imagine three
-different plugins using it.
-
-### Rules
-
-- Name it after the **location**, never the plugin. `AppointmentActions` ✅, `ConnectCallButton` ❌.
-- Props are the surrounding domain object(s) plus `className?`. No plugin-specific data.
-- No conditionals, imports, or feature flags referencing any plugin.
-- One render site per logical location — but check for *duplicate* implementations of the same
-  UI (staff vs. patient variants) and patch all of them.
-
-### Procedure
-
-1. In `care_fe/src/pluginTypes.ts`, add the props type and the entry:
-
-```ts
-/** Renders alongside an availability's name when picking a slot to book. */
-export type AppointmentSlotGroupHeaderComponentType = React.FC<{
-  availability: TokenSlot["availability"];
-  className?: string;
-}>;
-
-export type SupportedPluginComponents = {
-  // …
-  AppointmentSlotGroupHeader: AppointmentSlotGroupHeaderComponentType;
-};
-```
-
-2. Render it in the host component:
-
-```tsx
-<PLUGIN_Component
-  __name="AppointmentSlotGroupHeader"
-  availability={slot.availability}
-  className="ml-2"
-/>
-```
-
-3. Implement it in your plugin's manifest with a **structural mirror** of the props (you cannot
-   import core types across the federation boundary):
+Use a **structural mirror** of the checked-out host's props in the plugin; do not import core types
+across the federation boundary. Register the implementation in your plugin's manifest:
 
 ```tsx
 AppointmentSlotGroupHeader: lazy(() => import("./components/AppointmentSlotGroupHeader")),
 ```
 
-4. Add the core diff to your `.agent/core-diff.md` and raise it as a small, standalone PR to
-   `care_fe` — separate from your plugin work.
+### Props-less extension points
 
-### ⚠️ Props-less extension points
-
-A component that takes no props **must** be typed as:
+A plugin component whose host supplies only an optional class name can be typed as:
 
 ```ts
 export type MyOverlayComponentType = React.FC<{ className?: string }>;
 ```
 
-`React.FC<Record<string, never>>` breaks the `PluginComponentProps` discriminated union in
-`PluginEngine.tsx` and produces confusing type errors at every other call site.
+Match the host contract. The historical use of `React.FC<Record<string, never>>` in core broke
+the `PluginComponentProps` discriminated union in `PluginEngine.tsx`; if the checked-out host still has
+that problem, report it instead of patching core.
+
+## When no supported surface fits
+
+1. Inspect the checked-out host's manifest contract, registered overrides, and relevant staff/patient
+   render sites read-only. Record the checkout commit and the missing props or render location.
+2. File an issue on [`ohcnetwork/care_scaffold`](https://github.com/ohcnetwork/care_scaffold/issues)
+   with the intended plugin behavior, the inspected paths, reproduction evidence, and the supported
+   alternatives considered. If issue creation is unavailable, preserve an issue draft and report
+   the blocker.
+3. Use an existing supported surface if it meets the requirement; otherwise defer the affected
+   feature and continue independent plugin work. A scaffold PR may correct template guidance or
+   setup, but must not include a core patch as part of plugin development.
+
+Do not add an extension point, edit core types, patch a render site, or open a core PR from this
+workflow. The read-only boundary applies even to generic changes and bug fixes.
 
 ## Sanity check
 
-If your core diff contains anything other than (a) a props type + a `SupportedPluginComponents`
-key, and (b) one or two `<PLUGIN_Component>` render sites — stop and reconsider. You are probably
-putting plugin logic in core.
+The plugin work must leave `care` and `care_fe` unchanged. Verify their status against the starting
+state; do not revert pre-existing user changes. All new UI implementation belongs in the plugin's
+own repository.

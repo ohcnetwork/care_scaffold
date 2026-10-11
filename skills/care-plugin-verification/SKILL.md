@@ -7,18 +7,21 @@ description: Running, testing and debugging a CARE plugin end to end — dev ser
 
 ## Isolated dev topology
 
-Run `bootstrap.prompt.md` first. It creates dedicated `$WORKSPACE/care` and
-`$WORKSPACE/care_fe` checkouts and saves this workspace's ports in `care-scaffold.env`.
+Run `bootstrap.prompt.md` first. `$WORKSPACE` defaults to the scaffold checkout itself. Bootstrap
+clones missing independent cores at `$WORKSPACE/care` and `$WORKSPACE/care_fe`, preserving existing
+repositories, and saves this workspace's ports in `care-scaffold.env`. Plugins have separate Git
+roots at `$WORKSPACE/care/care_<name>` and `$WORKSPACE/care_<name>_fe`.
 Load that file before using the commands below:
 
 ```bash
 source "$WORKSPACE/care-scaffold.env"
+source "$WORKSPACE/.agent/paths.env"
 ```
 
 | Process | Command | Saved host port |
 | --- | --- | --- |
 | Backend and dependencies | `"$WORKSPACE/.agent/compose.sh" up -d --wait --build` | `CARE_API_PORT` |
-| Frontend host (inside `$CARE_FE`) | `npm run dev -- --host 127.0.0.1 --port "$CARE_FE_PORT" --strictPort` | `CARE_FE_PORT` |
+| Frontend host | `"$WORKSPACE/.agent/frontend.sh"` | `CARE_FE_PORT` |
 | Plugin frontend (inside its repo) | `npm run dev` | `PLUGIN_PORT`, written to `vite.config.ts` |
 | PostgreSQL / Redis | Started by the Compose wrapper | `CARE_DB_PORT` / `CARE_REDIS_PORT` |
 | S3 / S3 console / debugger | Started by the Compose wrapper | `CARE_S3_PORT` / `CARE_S3_CONSOLE_PORT` / `CARE_DEBUG_PORT` |
@@ -40,12 +43,12 @@ This checks availability without changing files. Saved ports stay the same on re
 If an unrelated process has taken a saved port, stop and resolve the conflict explicitly; do not
 kill that process, adopt it, or let Vite increment the port. `strictPort: true` makes both frontend servers fail instead of silently drifting.
 
-`$CARE_FE/.env.local` must contain the saved `CARE_API_URL` as `REACT_CARE_API_URL` and the
-plugin entry `ohcnetwork/care_connect_fe@localhost:<PLUGIN_PORT>/assets/remoteEntry.js`, with
+The external host launcher supplies the saved `CARE_API_URL` as `REACT_CARE_API_URL`.
+`$WORKSPACE/.agent/frontend.env` must contain the plugin entry `ohcnetwork/care_connect_fe@localhost:<PLUGIN_PORT>/assets/remoteEntry.js`, with
 `<PLUGIN_PORT>` replaced by its saved number. Additional plugins each need a separately checked,
 recorded port.
 
-Two things that are **not** hot-reloaded: `.env.local`, and the federated remote bundle.
+Two things that are **not** hot-reloaded: the host process environment and the federated remote bundle.
 Restart this workspace's `care_fe` for the former; hard-reload the browser after every plugin
 rebuild for the latter.
 
@@ -62,7 +65,7 @@ curl -s -o /dev/null -w '%{http_code}\n' "$CARE_API_URL/api/care_connect/config/
 
 # 3. Plugin installed in BOTH containers
 "$WORKSPACE/.agent/compose.sh" exec backend pip show care_connect
-"$WORKSPACE/.agent/compose.sh" exec celery pip show care_connect   # want 0.1.0-0.editable
+"$WORKSPACE/.agent/compose.sh" exec celery pip show care_connect   # check Editable project location: /plugins/care_connect
 
 # 4. Remote bundle served
 curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:$PLUGIN_PORT/assets/remoteEntry.js"
@@ -79,7 +82,8 @@ Upstream versions can hardcode frontend port 4000, default DB port 5432, automat
 database in global setup, or run reset commands through a host venv. Merely exporting
 `CARE_BACKEND_DIR` or `CARE_API_URL` does not override those implementations.
 
-Configure the workspace checkout's test settings before running tests:
+Keep plugin tests and their configuration in the plugin repository or `.agent/`. Never edit core
+test settings or run core autofix commands. Configure the independent test runner as follows:
 
 - Set the test base URL, web-server URL and strict preview port to the saved `CARE_FE_URL` and
   `CARE_FE_PORT`; point auth/API helpers at `CARE_API_URL`.
@@ -90,7 +94,8 @@ Configure the workspace checkout's test settings before running tests:
   their configured targets are verified; they can overwrite another running stack's data.
 - Add the plugin's saved endpoint to `REACT_ENABLED_APPS` before building the host.
 
-Then install Playwright, build the host and run the selected specs using the inspected scripts.
+Then install Playwright in the plugin, build the host with external environment configuration
+if needed, and run the plugin specs. Do not invoke unsafe stock core setup scripts.
 Use unique test data and restore only this workspace's verified snapshot between runs.
 **`$CARE_FE/tests/PLAYWRIGHT_GUIDE.md`** contains the selector and assertion patterns; read it
 before writing a test.
@@ -99,34 +104,27 @@ before writing a test.
 
 ### "My backend change had no effect" / "celery runs old code"
 
-Plugins are pip-installed **at image build time** (`dev.Dockerfile` runs `install_plugins.py` into
-`/.venv`, which is baked into the image — only the source tree is bind-mounted). A newly
-registered or newly renamed plug does not exist in a running container until you rebuild:
+The external Compose override mounts the plugin at `/plugins/care_connect` and installs it in
+editable mode at startup in **both** services. Verify the actual rendered configuration:
 
 ```bash
-"$WORKSPACE/.agent/compose.sh" up -d --wait --build
-```
-
-If you previously installed the plugin inside a running container as a shortcut, it writes to a
-single container's writable layer, not the workspace image — so it must be run against
-**both** `backend` and `celery`, and it is discarded whenever a container is recreated. That is
-the usual reason one service behaves correctly and the other silently runs stale code with no
-import error.
-
-```bash
+"$WORKSPACE/.agent/compose.sh" config
 "$WORKSPACE/.agent/compose.sh" exec backend python -c "import care_connect; print(care_connect.__file__)"
 "$WORKSPACE/.agent/compose.sh" exec celery pip show care_connect
 ```
 
-Also check the plugin is a **real directory** inside `$CARE_BE`, not a symlink — `COPY . /app`
-cannot follow a symlink out of the build context, so the image gets an empty plugin.
+The import and editable project location must refer to the mounted plugin, not a stale installed
+copy. Core's installer uses ordinary pip installation; do not run it as an editable-install fix.
+Celery only watches `/app`, so restart it after changes under `/plugins`. Restart both services
+after plugin metadata/dependency changes so their startup installs run again. Recreate services
+with `compose.sh up -d --wait` after changing the external Compose configuration.
 
 ### "The plugin just isn't there — no error, no component"
 
 Federation failures are caught and logged, then skipped. Check the console for
 `There was an error enabling the app <slug>`. Then:
 
-- Is `REACT_ENABLED_APPS` set, and was `care_fe` restarted after editing `.env.local`?
+- Is `REACT_ENABLED_APPS` set, and was `care_fe` restarted after editing `.agent/frontend.env`?
 - Is the plugin preview server running and serving `dist/assets/remoteEntry.js`?
 - Did you hard-reload after the plugin rebuilt?
 - Does `manifest.components` actually contain the extension-point key, spelled exactly as in
@@ -161,9 +159,12 @@ The staff queryset falls back to "sessions I participate in" unless the client p
 `cssCodeSplit: false` and remote CSS is not auto-injected. Third-party packages that ship their
 own CSS will not style anything. Inline the styles or drop the dependency.
 
-### "Local plugin under `apps/` isn't discovered"
+### "An independent plugin isn't discovered automatically"
 
-Auto-discovery uses `Dirent.isDirectory()` — **symlinks do not work**. Use a real directory.
+This workflow keeps frontend plugins at `$WORKSPACE/care_<name>_fe`, outside `care_fe/`.
+Register the federated preview explicitly
+through `REACT_ENABLED_APPS` in `.agent/frontend.env`, then restart `.agent/frontend.sh`.
+Do not copy or symlink the plugin into `care_fe/apps/` to use core's local auto-discovery.
 
 ### WebRTC / LiveKit: "ICE failed, add a TURN server"
 
@@ -191,12 +192,18 @@ Inspect this workspace's LiveKit container logs for `ICE candidate pair stats` a
 ## Pre-PR checks
 
 ```bash
-(cd "$CARE_FE" && npx tsc --noEmit && npm run lint-fix && npm run format)
-(cd "$WORKSPACE/care_<name>_fe" && npm run build)
+(cd "$PLUGIN_FE" && npm run build)
+git -C "$CARE_BE" diff --exit-code
+git -C "$CARE_BE" diff --cached --exit-code
+git -C "$CARE_FE" diff --exit-code
+git -C "$CARE_FE" diff --cached --exit-code
 "$WORKSPACE/.agent/compose.sh" exec backend python manage.py makemigrations --check --dry-run
 ```
 
-- [ ] `.agent/core-diff.md` reviewed; every core file justified in one line.
+- [ ] Both core checkouts retain their starting revisions and tracked state.
+- [ ] Scaffold status excludes core/plugin paths and generated local files; its index contains no
+  core/plugin code or gitlinks. Source `skills/` and `templates/` remain trackable.
+- [ ] Each plugin resolves to its own Git root, and core locally excludes the nested backend plugin.
 - [ ] Tested as staff and (if relevant) as an OTP patient.
 - [ ] Tested with companion plugins disabled.
-- [ ] No secrets in `plug_config.py` or any committed file.
+- [ ] No secrets in any committed file; all local runtime configuration is external to core.

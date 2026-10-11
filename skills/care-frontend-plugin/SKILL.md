@@ -64,9 +64,9 @@ React/react-dom belong in `peerDependencies`, not `dependencies`.
 
 ## Enabling it in the host
 
-Use the isolated `$WORKSPACE/care_fe` checkout and source `$WORKSPACE/care-scaffold.env`.
-Its `.env.local` must set `REACT_CARE_API_URL` to the saved `CARE_API_URL` and use this entry,
-replacing `<PLUGIN_PORT>` with the saved number:
+Use the read-only `$WORKSPACE/care_fe` checkout. Bootstrap creates `.agent/frontend.sh`,
+which supplies the saved API URL and reads `.agent/frontend.env`. Put this entry in that external
+environment file, replacing `<PLUGIN_PORT>` with the saved number; never edit core `.env.local`:
 
 ```text
 REACT_ENABLED_APPS=ohcnetwork/care_connect_fe@localhost:<PLUGIN_PORT>/assets/remoteEntry.js
@@ -79,12 +79,14 @@ Format: `org/repo` or `org/repo@host/path/to/remoteEntry.js`, comma-separated fo
 - The resolved **slug** is the repo name (`care_connect_fe`) — that is what appears in
   `window.__CARE_PLUGIN_RUNTIME__.meta`.
 
-`.env.local` is **not** hot-reloaded. Start or restart only this workspace's frontend with:
+Environment changes are **not** hot-reloaded. Start or restart only this workspace's frontend:
 
 ```bash
-cd "$CARE_FE"
-npm run dev -- --host 127.0.0.1 --port "$CARE_FE_PORT" --strictPort
+"$WORKSPACE/.agent/frontend.sh"
 ```
+
+Keep all feature code and tests in the plugin. Missing host hooks are scaffold blockers, not
+permission to change core types, components or configuration.
 
 ### Preview port allocation
 
@@ -238,4 +240,4 @@ The manifest chunk loads on **every page load of care_fe**, for every user. Keep
 - [ ] Every extension-point component is `lazy()`.
 - [ ] Every user-facing string is `t("<prefix>__key")` and defined in the plugin's `en.json`.
 - [ ] Every rendered root is wrapped in the scoped container.
-- [ ] No core `care_fe` file changed, except an extension point you deliberately added.
+- [ ] No tracked core `care_fe` file changed; all UI uses existing plugin interfaces.

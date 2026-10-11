@@ -151,8 +151,10 @@ field and it is meaningless there. Strip it in the client, as shown above.
   portal — useful when you want a global banner that must not leak to patients.
 - Patient-facing extension points are `AppointmentCardActions` and
   `AppointmentSlotGroupHeader` (the `PublicAppointments/Schedule.tsx` render site).
-- Plugin `routes` are injected into the **staff** router. A patient-portal page needs the
-  patient-facing extension points, or a core change — check before promising one.
+- Plugin `routes` are injected into the **staff** router. Verify the checked-out host's existing
+  patient-facing extension points before promising a patient-portal page. If they cannot support
+  the requirement, file a `care_scaffold` issue with the missing capability and inspected paths,
+  then use a supported surface or defer that feature. Do not change either core checkout.
 
 ## Data prerequisites for testing patient self-booking
 

@@ -204,23 +204,15 @@ Base classes: `font-semibold`, `rounded-md`, `text-sm`, `focus-visible:ring-1
 focus-visible:ring-gray-950`, `[&_svg]:size-4`.
 Sizes: `xs` h-6, `sm` h-8, `md`/`default` h-9, `lg` h-10, `icon` size-9.
 
-## Cloning components from the host (best fidelity)
+## Copying components from the host
 
-For a plugin developed under `care_fe/apps/`, core ships a CLI that copies a host component **and
-its whole transitive local import graph** into the plugin:
+Inspect host components read-only and copy the pieces needed into the independent `$PLUGIN_FE`
+repository. Follow their local imports, rewrite aliases to plugin-owned paths, and add required
+dependencies to the plugin's `package.json`. Copies do not update automatically with the host.
 
-```bash
-npm run clone-component -- @/components/ui/button care_connect_fe
-npm run clone-component -- @/components/ui/button care_connect_fe --dry-run
-npm run clone-component -- @/components/ui/button care_connect_fe --force
-```
-
-It rewrites host aliases (`@core/foo` → `@/foo`, `@careConfig` → `@/care.config`) and syncs any
-missing npm packages into the plugin's `package.json` (it does not run `npm install`).
-
-Caveat: clones are **independent copies** and will not stay in sync — re-run with `--force` to
-refresh. Only files under `src/` and `care.config.ts` are followed; anything else is reported as
-unresolved.
+Do not use core's `clone-component` command in this workflow: its destination is `care_fe/apps/`.
+Do not create frontend plugin directories or symlinks inside `care_fe/`. Keep all copied components,
+adaptations and dependency changes in the plugin repository.
 
 ## Icons
 

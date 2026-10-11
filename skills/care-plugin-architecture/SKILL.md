@@ -1,6 +1,6 @@
 ---
 name: care-plugin-architecture
-description: Load FIRST for any CARE plugin work. Decides what belongs in the plugin vs. core care/care_fe, explains the two-sided plugin model (Django app + Module Federation micro-frontend), and gives the decision tree for extending core data models without modifying them. Use when starting a plugin, reviewing whether a core change is justified, or when unsure where code should live.
+description: Load FIRST for any CARE plugin work. Enforces plugin-only changes with read-only core checkouts, explains the two-sided plugin model (Django app + Module Federation micro-frontend), and gives the decision tree for extending core data models without modifying them. Use when starting a plugin or deciding how to implement a feature without core edits.
 ---
 
 # CARE Plugin Architecture
@@ -8,10 +8,12 @@ description: Load FIRST for any CARE plugin work. Decides what belongs in the pl
 ## The prime directive
 
 > A plugin owns a **complete vertical feature** — models, migrations, API, UI, i18n, background
-> jobs — while adding **as close to zero lines as possible** to `care` and `care_fe`.
+> jobs — with **zero changes** to tracked core files in `care` and `care_fe`.
 
-Every line in core is a merge conflict against upstream and a reviewer's objection. The measure of a
-good CARE plugin is the size of its core diff, not the size of its feature.
+Core repositories are independent, ignored checkouts with read-only tracked files. All feature
+code belongs in the independent plugin repositories. Never add a generic core extension point or fix core during plugin work.
+Report unsupported capabilities and incorrect scaffold guidance on `ohcnetwork/care_scaffold`;
+a reusable template fix may follow as a scaffold PR. Continue only work supported by existing APIs.
 
 ## Two sides, two mechanisms
 
@@ -19,7 +21,7 @@ good CARE plugin is the size of its core diff, not the size of its feature.
 | --- | --- | --- |
 | Repo | `care_<name>` | `care_<name>_fe` |
 | Unit | Django app (pip package) | Vite app (Module Federation remote) |
-| Registered in | `care/plug_config.py` → `Plug(...)` | `care_fe/.env.local` → `REACT_ENABLED_APPS`, or `GET /api/v1/plug_config/` |
+| Registered in | External `ADDITIONAL_PLUGS` environment → `Plug(...)` | Host process `REACT_ENABLED_APPS`, or `GET /api/v1/plug_config/` |
 | Loaded by | `PlugManager` → `INSTALLED_APPS` + `config/urls.py` loop | `src/PluginEngine.tsx` → `setFederationRemote()` → `./manifest` |
 | Namespace | `/api/care_<name>/…` | `manifest.components` / `manifest.routes` |
 | Isolation | Own models, own migrations dir | Own bundle, own i18n namespace, own Tailwind scope |
@@ -44,12 +46,12 @@ Need to show UI somewhere in care_fe?
 ├─ Does a `SupportedPluginComponents` extension point already exist there?
 │  ├─ YES → implement it in your manifest. Zero core changes.  ← 90% of cases
 │  └─ NO  → is there a `PluginOverride` that can replace a registered component? Use that.
-│           Otherwise add ONE generic extension point to core (see care-extension-points).
+│           Otherwise report a scaffold blocker; do not edit core.
 └─ Need a whole page? → `manifest.routes` — zero core changes, ever.
 
 Need a new setting / credential?
 └─ `PluginSettings` in your plugin's settings.py, defaults + env fallback, values supplied
-   through `Plug(configs={...})`. NEVER add to core's settings/base.py.
+   through external `ADDITIONAL_PLUGS` configs. NEVER edit core settings or plug_config.py.
 
 Need a background job?
 └─ Celery task inside your plugin; register beat schedules from your own settings.
@@ -95,28 +97,23 @@ def on_booking_created(sender, instance, created, **kwargs):
 
 Registered from `AppConfig.ready()`. Core ships unchanged.
 
-## What a *justified* core change looks like
+## When core cannot support the feature
 
-Acceptable:
+First check existing extension points, routes, overrides, `meta` fields and signals. If none fits,
+record the exact missing interface and checked-out core revision in a `care_scaffold` issue, following
+`AGENTS.md`. Use a supported plugin design or leave that feature blocked. A missing core field,
+incorrect core type or absent UI hook does not authorize a core edit.
 
-- Adding a new key to `SupportedPluginComponents` in `care_fe/src/pluginTypes.ts` plus a single
-  `<PLUGIN_Component __name="…" />` render site — **generic**, named after the *location*
-  (`AppointmentActions`, `AppShellOverlay`), never after your plugin.
-- Adding a missing field to a core TypeScript type that the core API already returns
-  (e.g. `TokenSlot.availability.id`) — a bug fix, not a feature.
-- Adding `meta` to a core model that lacks it.
-
-Unacceptable:
-
-- `if settings.CONNECT_ENABLED:` anywhere in core.
-- Importing your plugin from core.
-- A new column on a core model for your feature.
-- Plugin-specific strings in `care_fe/public/locale/en.json`.
+The default workspace is the `care_scaffold` checkout itself. Backend plugins live at
+`$WORKSPACE/care/care_<name>` and frontend plugins at `$WORKSPACE/care_<name>_fe`, each with its
+own Git root. Core and plugins are ignored by the scaffold; the nested backend plugin is also
+excluded from core through its local `.git/info/exclude`. Plugin source stays trackable inside
+its own repository. Runtime registration and mounts live in `.agent/`.
 
 ## Directory shape to aim for
 
 ```
-care_<name>/                      # backend repo
+care/care_<name>/                 # backend repo inside the workspace
 ├── setup.py                      # name=care_<name>, install_requires
 ├── MANIFEST.in
 └── care_<name>/
@@ -127,7 +124,7 @@ care_<name>/                      # backend repo
     ├── models/  serializers/  viewsets/  tasks/  utils/  integrations/  tests/
     └── migrations/
 
-care_<name>_fe/                   # frontend repo
+care_<name>_fe/                   # frontend repo inside the workspace
 ├── vite.config.ts                # federation({ name, exposes: {"./manifest"} })
 ├── public/locale/en.json         # keys prefixed <name>__
 └── src/
@@ -154,7 +151,7 @@ care_<name>_fe/                   # frontend repo
 - `care-backend-plugin` — Django app mechanics.
 - `care-frontend-plugin` — federation, manifest, styling, i18n.
 - `care-design-system` — Tailwind theme, CARE palette, shadcn/ui, making UI look native.
-- `care-extension-points` — the catalog, and how to add one.
+- `care-extension-points` — the existing catalog and reporting missing capabilities.
 - `care-auth-contexts` — staff JWT vs. patient OTP.
 - `care-third-party-services` — brokering an external service, token minting, webhooks.
 - `care-plugin-interop` — cross-plugin integration.

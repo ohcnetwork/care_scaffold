@@ -2,404 +2,381 @@
 
 **You are an AI coding agent. Execute this document top to bottom.**
 
-Your goal: take the user from an empty workspace to a **running CARE stack with a working
-plugin scaffold wired into it**, then help them build their feature.
+Use `care_scaffold` as the reusable workspace for building the user's plugin. The plugin lives
+in independent repositories inside this checkout; only reusable tooling and guidance are tracked
+by the scaffold. No separate parent or sibling workspace is required.
+Do the work and report decisions, blockers and the final state.
 
-Do not summarise this document back to the user. Do the work. Report only decisions,
-blockers, and the final state.
+## Ground rules
 
----
+1. **Work only on the plugin. Zero core changes.** `care` and `care_fe` are independent, ignored
+   checkouts and read-only source dependencies. Do not edit their source, migrations, types,
+   translations, settings, `plug_config.py`, Dockerfiles or other tracked files. Do not add even a generic
+   extension point. Use existing plugin interfaces; report gaps as blockers.
+2. **Independent plugin repositories.** Create `care/care_<name>` and `care_<name>_fe` with
+   their own Git histories inside `care_scaffold`. Never register them as submodules or stage them
+   in the scaffold or core. The scaffold ignores both; core locally excludes the nested backend
+   plugin. Source stays trackable inside each plugin repository. Run Git commands in that root.
+3. **External configuration.** Keep the brief, plugin paths, runtime configuration and evidence
+   in `$WORKSPACE/.agent/`. Configure core through container/process environment and external
+   Compose overrides, never by editing its files. Runtime caches and installed dependencies
+   must leave tracked core files unchanged.
+4. **Never commit secrets.** Keep local credentials in ignored `.agent/` configuration or secret
+   environment variables. Plugin repositories have their own ignores for dependencies and secrets.
+5. **Isolate the development stack.** Use only this workspace's checkouts, saved ports and Compose
+   wrapper. Never adopt, configure or restart another workspace's services. Do not use core `make`
+   targets or bare Compose commands that omit the isolated override.
+6. **Ask before destroying.** Dropping databases, `down -v`, or force-pushing requires approval.
+7. **Verify each phase.** Do not advance past a failing check. Do not silently patch core to pass.
 
-## Ground rules (non-negotiable)
+## Scaffold feedback — applies in every phase
 
-1. **Minimal overlap with core.** `care` and `care_fe` are *reference* checkouts. They exist so
-   you can read their types, extension points and patterns. You modify them only to add a
-   **generic** extension point, and only after proving no existing one fits.
-2. **Two new repos, not a fork.** The plugin is `care_<name>` (Django) + `care_<name>_fe` (Vite).
-   Both have their own Git history. The backend plugin lives inside the dedicated backend
-   checkout's Docker build context; exclude it from core Git tracking.
-3. **Never commit secrets.** Plugin credentials go in `plug_config.py` configs or environment,
-   and `plug_config.py` must not be committed with real keys.
-4. **Ask before destroying.** Dropping databases, `docker compose down -v`, force-pushing:
-   confirm with the user first.
-5. **Isolate the development stack.** Use this workspace's own `care` and `care_fe` checkouts,
-   saved ports, and Compose wrapper. Never adopt, configure, or restart another workspace's
-   services. Reuse only resources recorded for this workspace.
-6. **Verify, don't assume.** Every phase has an explicit check. Do not advance past a failing check.
+When a scaffold script, template or instruction blocks progress or sends the implementation in
+an incorrect direction, file an issue on **ohcnetwork/care_scaffold**. Include affected scaffold
+paths, actual core revisions, reproduction steps, expected versus actual behavior, and the plugin
+impact. Link an existing matching issue instead of duplicating it. Missing supported core hooks
+also belong in this feedback workflow; they do not authorize a core edit.
 
----
+For example, write a concrete report to `.agent/scaffold-issue.md`, then use
+`gh issue create --repo ohcnetwork/care_scaffold --title "..." --body-file .agent/scaffold-issue.md`.
+Save the resulting URL in `.agent/scaffold-issues.md`. If filing is unavailable, save the report
+and state that the issue is pending; continue independent plugin work.
 
-## Phase 0 — Interview
+A reusable fix may be submitted as a scaffold PR referencing that issue. Keep application code
+out of the scaffold PR. Leave unsupported feature work blocked until a supported interface is
+available; do not open or implement a core patch as part of the plugin task.
 
-Ask the user (batch these into one question set, don't drip-feed):
+## Phase 0 — Brief and repository paths
 
-- **Plugin name** — short lowercase word, e.g. `connect`, `scribe`, `labs`.
-  Derive: `care_<name>` (backend), `care_<name>_fe` (frontend), `<NAME>` uppercase settings
-  prefix, `<name>__` i18n prefix.
-- **What does it do?** One paragraph. You will turn this into a data model and a UI surface.
-- **Does it need its own database tables?** If it only annotates existing records, prefer a
-  `meta` JSON field on a core model over a new table (see `care-plugin-architecture` skill).
-- **Where in the UI should it appear?** Offer the extension-point catalog from the
-  `care-extension-points` skill as a menu.
-- **Does the patient portal need it?** (OTP-authenticated flows are a separate, phone-scoped
-  API surface — see `care-auth-contexts`.)
-- **Lifecycle and roles** — if the feature has records with states, ask explicitly: what are the
-  states, who may move between them, and what capability does each role get? Agents reliably
-  invent these; they are product decisions, not technical ones.
-- **Third-party services?** LiveKit, an LLM provider, an SMS gateway, etc.
-- **Workspace root** — where to put everything. Default: the current directory.
+Use known answers; ask only for missing product decisions, in one batch:
 
-Record the answers in `.agent/plugin-brief.md` in the workspace root. You will re-read it later.
+- Plugin name: short lowercase word, such as `connect`; derive `care_connect`, `care_connect_fe`,
+  settings prefix `CONNECT`, and i18n prefix `connect__`.
+- Feature, data model, lifecycle, roles and third-party services.
+- UI surface and whether patient OTP flows are required. Consult existing extension points.
+- Repository locations: default to `care/care_<name>` and `care_<name>_fe` inside this scaffold
+  checkout. Use a separate scaffold checkout per isolated stack. Both plugin sides are optional.
 
----
+Set absolute `$WORKSPACE` to this **scaffold checkout**, not its parent or a core checkout.
+Record answers in `$WORKSPACE/.agent/plugin-brief.md`. Existing plugin repositories must be
+inspected and reused only when they are the intended plugin; the generator preserves existing
+plugin repositories and creates only missing sides.
 
-## Phase 1 — Isolated workspace and core repositories
+## Phase 1 — Independent core checkouts and isolated configuration
 
-Use an absolute `$WORKSPACE` path. This bootstrap requires Python 3 and Docker Compose **2.24.4+**.
-The version requirement is for [`!override` port replacement](https://docs.docker.com/reference/compose-file/merge/#replace-value),
-so the upstream published ports are removed, not retained alongside the new ports.
-
-### 1.1 Configure and save ports
-
-Use `$WORKSPACE/care-scaffold.env` as the single source for core paths and ports. On first setup,
-optionally copy `<this-repo>/care-scaffold.env.example` there and edit the port values before
-running the helper. Explicit values win; blank or missing port entries are allocated. Do not
-replace an existing workspace configuration with the example.
+Requires Git, Python 3 and Docker Compose **2.24.4+** (`!override` replaces upstream port lists).
+If starting without a scaffold checkout, clone it first:
 
 ```bash
-python3 <this-repo>/scripts/configure-workspace.py --workspace "$WORKSPACE"
+git clone https://github.com/ohcnetwork/care_scaffold.git
+```
+
+Inside the scaffold workspace, clone each core only if its directory does not exist. An existing
+path must be the exact Git root, not a directory that resolves to the scaffold repository:
+
+```bash
+for core in care care_fe; do
+  core_path="$WORKSPACE/$core"
+  if [ ! -e "$core_path" ] && [ ! -L "$core_path" ]; then
+    git clone "https://github.com/ohcnetwork/$core.git" "$core_path"
+  fi
+  [ ! -L "$core_path" ] || { echo "Refusing symlinked core: $core_path"; exit 1; }
+  [ "$(git -C "$core_path" rev-parse --show-toplevel)" = "$core_path" ] || exit 1
+  git -C "$core_path" status --short
+  git -C "$core_path" remote -v
+  git -C "$core_path" rev-parse HEAD
+done
+```
+
+Verify the expected ohcnetwork remotes and record starting core revisions and status in `.agent/`
+for comparison at the end. Preserve existing repositories, branches and modifications on reruns;
+do not pull, reset or replace them. Core updates are separate maintenance. Never reuse another
+workspace's checkouts or symlink to them. Core and plugins must not appear as gitlinks in the
+scaffold index. If migrating an older submodule layout, preserve its Git metadata and working
+tree before removing submodule registration; do not delete or reclone existing work.
+
+Use `$WORKSPACE/care-scaffold.env` as the single source for core paths and ports. Optionally copy
+`care-scaffold.env.example` there **only on first setup**, and edit explicit ports before running:
+
+```bash
+python3 "$WORKSPACE/scripts/configure-workspace.py" --workspace "$WORKSPACE"
 source "$WORKSPACE/care-scaffold.env"
 ```
 
-The helper checks IPv4 and IPv6 availability, rejects occupied explicit ports on first setup,
-and fills blank or missing ports from a workspace-specific starting point. It saves eight
-distinct ports. `care-scaffold.env` records `CARE_BE`, `CARE_FE`,
-`COMPOSE_PROJECT_NAME`, `CARE_API_URL`, `CARE_FE_URL`, and:
+The helper validates explicit ports, allocates missing ones, and preserves saved assignments.
+`CARE_BE` is `$WORKSPACE/care`; `CARE_FE` is `$WORKSPACE/care_fe`. It saves `COMPOSE_PROJECT_NAME`,
+`CARE_API_URL`, `CARE_FE_URL`, and eight distinct loopback host ports:
 
-| Variable | Host service |
+| Variable | Service |
 | --- | --- |
-| `CARE_API_PORT` | CARE backend |
-| `CARE_FE_PORT` | CARE frontend |
-| `PLUGIN_PORT` | Plugin preview |
+| `CARE_API_PORT` | Backend API |
+| `CARE_FE_PORT` | Host frontend |
+| `PLUGIN_PORT` | First plugin preview |
 | `CARE_DB_PORT` | PostgreSQL |
 | `CARE_REDIS_PORT` | Redis |
 | `CARE_S3_PORT` | MinIO API / browser uploads |
 | `CARE_S3_CONSOLE_PORT` | MinIO console |
 | `CARE_DEBUG_PORT` | Backend debugger |
 
-It also generates `.agent/compose.override.yaml` and executable `.agent/compose.sh`. They isolate
-published ports, the network, database/Redis volumes, and the backend/Celery image name. Published
-ports bind to loopback. Internal container ports and service names stay unchanged.
+It generates `.agent/compose.override.yaml` and `.agent/compose.sh` with isolated ports,
+network, volumes and image names. The wrapper also reads `.agent/paths.env` and loads
+`.agent/plugin.compose.yaml` when present; neither is overwritten by the helper.
 
-Rerunning the helper preserves saved assignments, including when this stack is running. Before
-a cold start, with this workspace's services stopped, check availability without changing files:
-
-```bash
-python3 <this-repo>/scripts/configure-workspace.py --workspace "$WORKSPACE" --check-ports
-```
-
-Availability checks cannot reserve ports until startup: if another process later takes a saved
-port, startup must fail. Identify the owner; never kill or adopt it or silently choose a new
-port. For a deliberate reassignment, stop this workspace, edit `care-scaffold.env`, rerun the
-helper to refresh derived URLs, source `care-scaffold.env` again, then update the frontend API
-URL, plugin configuration, and federation registration together before restarting.
-
-If an older workspace has only `.agent/stack.env`, the helper migrates its values to
-`care-scaffold.env` and removes the old file only after a successful write. If both files exist,
-resolve the duplicate configuration explicitly before proceeding; the helper will not choose
-between them.
-
-### 1.2 Clone dedicated core checkouts
-
-`CARE_BE` is always `$WORKSPACE/care`; `CARE_FE` is always `$WORKSPACE/care_fe`.
-Clone missing repositories:
+Before a cold start, check saved ports without changing configuration:
 
 ```bash
-git clone https://github.com/ohcnetwork/care.git "$CARE_BE"
-git clone https://github.com/ohcnetwork/care_fe.git "$CARE_FE"
+python3 "$WORKSPACE/scripts/configure-workspace.py" --workspace "$WORKSPACE" --check-ports
 ```
 
-On reruns, reuse these directories only after confirming they are this workspace's checkouts
-with the expected Git remotes and files. Do not search `~/git`, siblings, or other workspaces for
-reusable installations, and do not symlink these paths to another checkout. If either directory
-predates this bootstrap and ownership is unclear, choose a fresh workspace before proceeding.
+No check reserves a port. Docker and Vite must fail on conflicts; never kill an unrelated owner
+or silently select another port. To reassign, stop this workspace, edit `care-scaffold.env`,
+rerun the helper and refresh external plugin/host configuration. If `.agent/stack.env` exists,
+the helper migrates it; if both old and new files exist, resolve the duplicate explicitly.
 
-**Check:** both paths are real directories under `$WORKSPACE`, with `plug_config.py` and
-`src/pluginTypes.ts` respectively. Inspect the cloned Compose files for additional services,
-fixed container names, external volumes, or host bind mounts that would escape isolation; adapt
-only this workspace's override if upstream has changed.
+**Check:** each core resolves to its own Git root and its initial revision/status is recorded.
+Both core directories are ignored by the scaffold; no tracked core files were changed by setup.
+Inspect core Compose files for fixed names, external resources or mounts that escape isolation;
+adapt only the external override if needed, and report a scaffold issue.
 
-### 1.3 Record plugin paths
-
-Write `$WORKSPACE/.agent/paths.env` with only the absolute paths for `PLUGIN_BE` and `PLUGIN_FE`.
-Keep core paths and ports only in `care-scaffold.env`; source both files in future sessions.
-Initially the generator creates plugins at `$WORKSPACE/care_<name>` and
-`$WORKSPACE/care_<name>_fe`. Update `PLUGIN_BE` after moving it into the dedicated backend in 6.1.
-
-Do not commit `care-scaffold.env` or `.agent/` (add both to the workspace's ignore rules if needed).
-
----
-
-## Phase 2 — Backend up
-
-### 2.0 Verify the isolated configuration
+## Phase 2 — Start the backend
 
 ```bash
 "$WORKSPACE/.agent/compose.sh" config
 "$WORKSPACE/.agent/compose.sh" ps
 ```
 
-Before starting, verify the rendered config: every published host port matches `care-scaffold.env`,
-the project/network/image/volume names are workspace-specific, and bind mounts refer to this
-workspace. Confirm browser-facing S3 endpoints use `CARE_S3_PORT`; internal requests still use
-`http://minio:9000`. Existing services on 9000, 4000, 5433, 6380, 9100, or 9001 belong to other
-stacks and are left alone. Only reuse containers belonging to the saved project and checkout.
-
-**Use `.agent/compose.sh` for every operation.** Plain `make` targets and bare `docker compose`
-commands can omit the override and return to shared ports or resources.
-
-### 2.1 Start and seed
+Check all host ports and workspace-specific network/image/volume names before starting.
+Browser-facing S3 URLs must use `CARE_S3_PORT`; internal traffic remains `http://minio:9000`.
 
 ```bash
 "$WORKSPACE/.agent/compose.sh" up -d --build --wait
 "$WORKSPACE/.agent/compose.sh" exec backend python manage.py migrate
-# First setup only; do not reload fixtures into an existing populated workspace.
+# First setup only; never reload fixtures into an existing populated workspace.
 "$WORKSPACE/.agent/compose.sh" exec backend python manage.py load_fixtures
 ```
 
-If Docker is unavailable, stop and report the requirement. Do not fall back to the user's host
-PostgreSQL/Redis or an existing venv backend. An explicitly requested venv setup must preserve
-these same checkout, database, storage, and port boundaries.
+If Docker is unavailable, report the requirement. Do not fall back to the user's databases or
+an existing host backend. `compose.sh down` preserves volumes; never use `down -v` without approval.
 
-> Never use `down -v` or `make teardown` without approval: these delete database volumes.
-> `"$WORKSPACE/.agent/compose.sh" down` stops only this workspace and preserves named volumes.
+Fixture users include `care-admin`, `care-doctor`, `care-nurse`, `care-staff`, `care-volunteer`,
+`care-fac-admin`, `care-role-admin`, `care-role-manager`, `care-role-member`; password `Ohcn@123`.
 
-### Fixture credentials (all password `Ohcn@123`)
+**Check:** `curl -s "$CARE_API_URL/api/v1/plug_config/"` returns JSON (401 means the server is
+reachable). `compose.sh ps` must show only this workspace's saved ports.
 
-`care-doctor`, `care-admin`, `care-nurse`, `care-staff`, `care-volunteer`, `care-fac-admin`,
-`care-role-admin`, `care-role-manager`, `care-role-member`.
+## Phase 3 — Start the host frontend without editing core
 
-**Check:** `curl -s "$CARE_API_URL/api/v1/plug_config/"` returns JSON
-(401 is fine — it means the server is up). Confirm `compose.sh ps` shows only the saved ports.
+Inspect the saved port with `lsof -nP -iTCP:"$CARE_FE_PORT" -sTCP:LISTEN`. Reuse a listener only
+when its working directory, arguments and API URL identify this workspace's host.
 
----
-
-## Phase 3 — Frontend up
-
-### 3.0 Detect only this workspace's server
+On first setup create `.agent/frontend.env` with `REACT_ENABLED_APPS=''`. Preserve it on reruns.
+Create executable `$WORKSPACE/.agent/frontend.sh` with:
 
 ```bash
-lsof -nP -iTCP:"$CARE_FE_PORT" -sTCP:LISTEN
+#!/usr/bin/env bash
+set -euo pipefail
+STACK_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+set -a
+source "$STACK_DIR/../care-scaffold.env"
+source "$STACK_DIR/frontend.env"
+set +a
+cd "$CARE_FE"
+exec env REACT_CARE_API_URL="$CARE_API_URL" \
+  npm run dev -- --host 127.0.0.1 --port "$CARE_FE_PORT" --strictPort
 ```
 
-If occupied, inspect the listener's working directory and arguments. Reuse it only if it is
-`$CARE_FE` on the saved port with the correct API URL. A listener from another workspace is a
-conflict to resolve, not a server to adopt. Restart only this workspace's server after env edits.
-
-### 3.1 Configure and start
-
-In `$CARE_FE/.env.local`, set exactly one `REACT_CARE_API_URL` entry to the saved `CARE_API_URL`.
-Update any old value rather than appending a duplicate or retaining a default URL. Preserve other
-settings. Verify local backend CORS/CSRF settings allow `CARE_FE_URL` if the checked-out version
-restricts them; make any needed development override only for this workspace.
+Install dependencies without changing the core lockfile, then start that wrapper:
 
 ```bash
 cd "$CARE_FE"
-npm install --ignore-scripts && npm run postinstall
-npm run dev -- --host 127.0.0.1 --port "$CARE_FE_PORT" --strictPort
+npm ci --ignore-scripts && npm_config_package_lock=false npm run postinstall
+"$WORKSPACE/.agent/frontend.sh"
 ```
 
-**Check:** the login page renders at `$CARE_FE_URL`, its network requests use `$CARE_API_URL`, and
-you can sign in as `care-admin` / `Ohcn@123`. `--strictPort` prevents an unexpected port change.
+Do not write `care_fe/.env.local` or edit Vite configuration. If additional backend CORS/CSRF
+configuration is needed, supply supported environment settings in the external Compose override.
 
-> `.env.local` changes are **not** hot-reloaded. Restart this workspace's server with the same
-> explicit port arguments after every edit.
+**Check:** sign in at `CARE_FE_URL` as `care-admin`; requests use `CARE_API_URL`. Check that
+tracked core files are unchanged. Environment changes require a host restart on the same port.
 
----
+## Phase 4 — Load skills
 
-## Phase 4 — Install the skills
+Read `$WORKSPACE/skills/care-plugin-architecture/SKILL.md` first, then the skills relevant to the
+current step. `AGENTS.md` is the repository-boundary policy for future sessions. Keep skill
+installation copies, if required by the agent runtime, in the ignored `$WORKSPACE/.github/skills/`.
+Keep the source `skills/` and `templates/` tracked; do not edit generated copies as the source.
 
-The skills are the reason this works. Put them where your agent runtime will find them.
+## Phase 5 — Create independent plugin repositories
 
-```bash
-mkdir -p "$WORKSPACE/.github/skills"
-cp -R <this-repo>/skills/* "$WORKSPACE/.github/skills/"
-```
-
-Also copy `AGENTS.md` guidance into the workspace root `AGENTS.md` if one does not exist, so a
-future session re-orients itself without re-running this prompt.
-
-**Check:** `ls "$WORKSPACE/.github/skills"` lists nine directories, each with a `SKILL.md`.
-
-**Now read `skills/care-plugin-architecture/SKILL.md` in full before writing any plugin code.**
-
----
-
-## Phase 5 — Scaffold the plugin
+For example (substitute the agreed plugin name and title):
 
 ```bash
-<this-repo>/scripts/new-plugin.sh \
+"$WORKSPACE/scripts/new-plugin.sh" \
   --name connect \
   --title "Care Connect" \
   --description "Teleconsultation for CARE" \
-  --out "$WORKSPACE" \
   --port "$PLUGIN_PORT" \
   --api-url "$CARE_API_URL"
 ```
 
-This materialises:
+The generator defaults to this scaffold checkout, regardless of the current directory. It creates
+`$WORKSPACE/care/care_connect` and `$WORKSPACE/care_connect_fe`, initializes Git separately in
+each, and creates no commits or remotes. Use `--out "$WORKSPACE"` only when explicitly selecting
+another workspace with the same layout. The backend core must already be its own Git root.
 
-- `$WORKSPACE/care_connect/` — Django package (`setup.py`, `care_connect/{apps,settings,urls}.py`,
-  `models/`, `serializers/`, `viewsets/`, `migrations/`, `tests/`).
-- `$WORKSPACE/care_connect_fe/` — Vite app (`vite.config.ts` with federation, `src/manifest.tsx`,
-  `src/utils/api.ts`, `src/components/Page.tsx`, `public/locale/en.json`).
+Reruns leave existing plugin repositories intact, including their history, remotes, changes and
+configuration, and create only missing sides. An existing directory without its own Git root is
+rejected. The generator adds `/care_connect/` to core's local `.git/info/exclude` without editing
+tracked core files. The scaffold's root-anchored `/care/` and `/care_*/` rules ignore both plugin
+paths. If only one side is needed, remove only a newly generated unused side before feature work;
+never delete an existing plugin repository on a rerun.
 
-**Check:** no file under either directory still contains a `__PLUGIN` placeholder token:
+Record absolute `PLUGIN_BE` and `PLUGIN_FE` paths as shell-quoted assignments in
+`$WORKSPACE/.agent/paths.env`. Keep core paths and ports only in `care-scaffold.env`; source both
+files in future sessions. For this example, `PLUGIN_BE="$WORKSPACE/care/care_connect"` and
+`PLUGIN_FE="$WORKSPACE/care_connect_fe"`. The nested backend plugin remains its own repository.
 
-```bash
-grep -rn '__PLUGIN_\|__I18N_PREFIX__' "$WORKSPACE/care_connect" "$WORKSPACE/care_connect_fe" && echo "FAIL: unsubstituted tokens"
-```
-
----
-
-## Phase 6 — Wire into core
-
-This phase wires the plugin into the dedicated core checkouts. Keep the changes to a handful of lines.
-
-### 6.1 Backend registration — `$CARE_BE/plug_config.py`
-
-Append a `Plug` and add it to the `plugs` list:
-
-```python
-care_connect = Plug(
-    name="care_connect",
-    package_name="care_connect",   # local dir for dev; git+https://… for deploys
-    version="",                    # empty version + local dir ⇒ pip install -e ./care_connect
-    configs={
-        "CONNECT_SOME_KEY": "value",
-    },
-)
-
-plugs = [care_connect, ...]
-```
-
-Place the plugin inside the backend checkout so pip — and Docker's build context — can see it:
+**Check:** no template placeholders remain; `git -C "$PLUGIN_BE" rev-parse --show-toplevel` and
+its frontend equivalent identify the two independent roots, not the scaffold. Plugin source is
+visible to Git and agent searches run from each plugin root. Verify generated paths are excluded:
 
 ```bash
-# A REAL directory, not a symlink.
-mv "$PLUGIN_BE" "$CARE_BE/care_connect"       # or: git clone straight into $CARE_BE/
+git -C "$WORKSPACE" status --short --untracked-files=all
+git -C "$WORKSPACE" check-ignore care/ care_fe/ care_connect_fe/ .agent/ care-scaffold.env .github/skills/
+git -C "$CARE_BE" check-ignore care_connect/
 ```
 
-> ⚠️ **Do not use a symlink.** `dev.Dockerfile` does `COPY . /app`, and Docker's build context
-> cannot follow a symlink that points outside it. The link resolves to nothing in the image and
-> `install_plugins.py` fails or silently installs nothing. Keep the plugin repo as a real
-> directory inside `$CARE_BE` and give it its own git remote.
+No core or plugin gitlink appears in the scaffold index; source `scripts/`, `templates/` and
+`skills/` remain trackable.
 
-Update `PLUGIN_BE` in `.agent/paths.env` to the new path and exclude this nested plugin repo
-from the dedicated core checkout's Git tracking.
+## Phase 6 — Register through external configuration
 
-Rebuild the workspace image: `dev.Dockerfile` installs plugins **at image build time** into
-`/.venv`, and only the source tree is bind-mounted. Both backend and Celery must use the rebuilt
-workspace-specific image.
+### 6.1 Backend
+
+Core's `PlugManager` already reads `ADDITIONAL_PLUGS` (JSON). Use it without editing
+`plug_config.py`. For the example plugin, write `$WORKSPACE/.agent/plugin.compose.yaml`:
+
+```yaml
+services:
+  backend:
+    build:
+      args:
+        ADDITIONAL_PLUGS: ""
+    environment: &plugin_environment
+      ADDITIONAL_PLUGS: >-
+        [{"name":"care_connect","package_name":"/plugins/care_connect","version":"","configs":{"CONNECT_ENABLED":true}}]
+    volumes:
+      - &plugin_mount
+        type: bind
+        source: ${PLUGIN_BE:?Set PLUGIN_BE in .agent/paths.env}
+        target: /plugins/care_connect
+        bind:
+          create_host_path: false
+    entrypoint:
+      - bash
+      - -c
+      - python -m pip install -e /plugins/care_connect && exec bash scripts/start-dev.sh
+  celery:
+    environment: *plugin_environment
+    volumes:
+      - *plugin_mount
+    entrypoint:
+      - bash
+      - -c
+      - python -m pip install -e /plugins/care_connect && exec bash scripts/celery-dev.sh
+```
+
+Substitute names and settings for the actual plugin. Preserve any existing local override entries.
+This uses the unmodified core Dockerfile and mounts the independent plugin outside `/app`.
+The empty **build** argument prevents Docker from trying to install an unpublished host path
+while building. The **runtime** environment registers the mounted plugin; both entrypoints
+install it in editable mode on every container start. Core's `install_plugins.py` by itself
+performs an ordinary installation, not an editable one.
 
 ```bash
+"$WORKSPACE/.agent/compose.sh" config
 "$WORKSPACE/.agent/compose.sh" up -d --build --wait
 "$WORKSPACE/.agent/compose.sh" exec backend python manage.py makemigrations care_connect
 "$WORKSPACE/.agent/compose.sh" exec backend python manage.py migrate
 ```
 
-**Check:** `curl -s "$CARE_API_URL/api/care_connect/config/"` returns something other than 404.
+Verify the mount, runtime registration and entrypoints in **both** services. Never mount over
+core files. Celery's core watcher watches `/app`, so restart this workspace's Celery after plugin
+source changes: `"$WORKSPACE/.agent/compose.sh" restart celery`.
 
-### 6.2 Frontend registration — `$CARE_FE/.env.local`
+**Check:** import paths in both containers point to `/plugins/care_connect`; `pip show` reports
+an editable project location there; the plugin API is mounted. Keep generated migrations in the
+plugin repository. For a frontend-only plugin, skip this backend registration.
 
-Set this entry using the **numeric value** saved as `PLUGIN_PORT` (substitute it when writing the
-file, do not leave a shell variable reference in `.env.local`):
+### 6.2 Frontend
+
+Set `REACT_ENABLED_APPS` in `.agent/frontend.env` to
+`ohcnetwork/care_connect_fe@localhost:<PLUGIN_PORT>/assets/remoteEntry.js`, using the saved numeric
+port and actual plugin slug. Preserve any other comma-separated entries. Additional plugins need
+separate available ports, not the first plugin's saved port.
 
 ```bash
-REACT_ENABLED_APPS=ohcnetwork/care_connect_fe@localhost:${PLUGIN_PORT}/assets/remoteEntry.js
+cd "$PLUGIN_FE"
+npm install
+npm run dev
 ```
 
-Append to any existing value (comma-separated) rather than overwriting — other plugins in this
-workspace may already be enabled. The generator has also written the selected preview port and
-standalone API URL into the plugin template.
+Restart only the host through `.agent/frontend.sh` and hard-reload the browser after rebuilding
+the remote. The plugin uses a strict preview port; resolve conflicts without adopting other servers.
 
-```bash
-lsof -nP -iTCP:"$PLUGIN_PORT" -sTCP:LISTEN
-cd "$PLUGIN_FE" && npm install && npm run dev
-```
+**Check:** `http://localhost:$PLUGIN_PORT/assets/remoteEntry.js` is served, the browser reports no
+plugin-loading error, and `window.__CARE_PLUGIN_RUNTIME__.meta` contains the slug.
 
-Reuse a listener only after verifying it belongs to `$PLUGIN_FE`. The plugin uses `strictPort`;
-if a foreign process owns the port, resolve the conflict explicitly and keep registration and
-preview configuration aligned. For additional plugins, allocate separate available ports; do
-not give every plugin the workspace's first `PLUGIN_PORT`.
+### 6.3 UI placement
 
-Restart only `$CARE_FE` with `--host 127.0.0.1 --port "$CARE_FE_PORT" --strictPort` so it picks up
-`.env.local`. Hard-reload the browser after rebuilding the plugin.
+Use existing components, routes, tabs, navigation or registered overrides. Read
+`care-extension-points` and verify the checked-out host's types without editing them. If no supported
+surface can satisfy the requirement, follow the scaffold-feedback workflow. There is no core-edit
+fallback.
 
-**Check:** the remote is served at `http://localhost:$PLUGIN_PORT/assets/remoteEntry.js`, the
-browser console has no `There was an error enabling the app care_connect_fe`, and
-`window.__CARE_PLUGIN_RUNTIME__.meta` contains your slug.
+## Phase 7 — Build the plugin
 
-### 6.3 Extension points — only if needed
+Re-read `.agent/plugin-brief.md`. Keep all feature work in the selected plugin repositories:
 
-If your UI has nowhere to attach, add a new extension point to core. Load the
-`care-extension-points` skill and follow its "Adding a new extension point" procedure exactly.
-Keep the change generic and plugin-agnostic; it is a PR to core and will be reviewed as such.
+1. Models and migrations; reuse existing core `meta` fields and signals when appropriate.
+2. Serializers and viewsets, permission-scoped querysets, then URLs. Load `care-auth-contexts`.
+3. Verify the API with an authenticated request before writing React against it.
+4. Frontend types and API client, then components and manifest. Read `care-design-system` first.
+5. Namespaced i18n in the plugin's own locale files.
+6. Background jobs and integrations. For external services, read `care-third-party-services`
+   before designing authorization, tokens and webhook verification.
 
-Track every core file you touch in `$WORKSPACE/.agent/core-diff.md`. The list should stay short.
+Use structurally mirrored host types; never fix a mismatch by changing core. Consult the
+matching skill for each step and report scaffold defects as they are found.
 
----
+## Phase 8 — Verify
 
-## Phase 7 — Build the feature
+1. Exercise the staff happy path and patient OTP flows when applicable.
+2. Confirm plugin requests hit its API and use the right permission scope.
+3. Build the frontend plugin and run relevant plugin tests. Keep test configuration and test code
+   in the plugin or `.agent/`, never patch core test settings to make a run pass.
+4. Inspect both core checkouts:
+   `git -C "$CARE_BE" diff --exit-code` and `git -C "$CARE_BE" diff --cached --exit-code`, then
+   repeat for `CARE_FE`. Compare HEAD and status with the recorded starting state. If generated
+   tools changed a tracked file, inspect and remove only your change; preserve pre-existing work.
+5. Confirm generated paths stay out of scaffold status, each plugin resolves to its own Git root,
+   and the scaffold index contains only scaffold files, with no core/plugin code or gitlinks.
+   Confirm the nested backend plugin is excluded locally from the backend core checkout.
 
-Now, and only now, implement what the user described in Phase 0.
+Read `care-plugin-verification` for debugging. A required unsupported core capability remains an
+explicit blocker; never claim completion by patching core.
 
-Recommended order — do not build the UI before the API works:
+## Phase 9 — Publish plugin repositories
 
-1. **Model** the domain in `care_<name>/models/`. Prefer extending core via `meta` JSON +
-   signals over new FKs into core tables. Generate + apply migrations.
-2. **Serializers + viewsets**, registered in `care_<name>/urls.py`. Scope every queryset by
-   permission (see `care-auth-contexts`). Add the OTP-scoped variants if the patient portal
-   needs them.
-3. **Verify the API with `curl`** before touching React. Log in via
-   `POST /api/v1/auth/login/` to get a token.
-4. **Frontend types + API client** in `src/types.ts` / `src/utils/api.ts`.
-5. **Components**, registered in `src/manifest.tsx` under `components` / `routes`.
-   Load the `care-design-system` skill first — the plugin has its own Tailwind build and will
-   look foreign unless you reproduce CARE's palette and match the host's shadcn conventions.
-6. **i18n**: every user-facing string uses `t("<name>__some_key")`, defined in the plugin's own
-   `public/locale/en.json`.
-7. **Async work** (celery tasks, webhooks, beat schedules) last.
-   If the plugin brokers a third-party service, load `care-third-party-services` **before**
-   step 2 — the API secret must never leave the backend, and the token/webhook design shapes
-   your viewsets.
-
-Consult the matching skill before each step. Re-read `.agent/plugin-brief.md` if you drift.
-
----
-
-## Phase 8 — Verify end to end
-
-1. Hard-reload `care_fe`; confirm your component renders at its extension point.
-2. Exercise the happy path as a staff user, and (if applicable) as an OTP patient user.
-3. Check the network tab: requests hit `/api/care_<name>/…`, not core routes.
-4. `cd "$CARE_FE" && npx tsc --noEmit` and `cd "$PLUGIN_FE" && npm run build` both pass.
-5. Re-read `.agent/core-diff.md`. For each core file listed, justify it in one line. If you
-   cannot, revert it and find another way.
-
-Load `care-plugin-verification` for debugging recipes (stale plugin installs, federation 404s,
-i18n keys rendering raw, CORS-looking errors that are really 500s).
-
----
+Once the plugin is built and verified, publish each required plugin repository to its own remote
+using the agreed owner and visibility. Ask only if those destination details are missing. Review
+and commit within each plugin root; never commit app code or add app submodules in the scaffold.
+Keep the scaffold checkout reusable. Local Git repositories can be used throughout development
+before remote publication. Scaffold issue fixes belong in a separate scaffold PR.
 
 ## Final report
 
-Produce a short summary containing:
-
-- Paths to the two new plugin repos.
-- The exact list of core files touched, with a one-line justification each.
-- The API surface added, as a route table.
-- The extension points consumed.
-- Saved stack configuration, every assigned host port, and exact commands to restart this workspace
-  (`.agent/compose.sh`, host Vite with explicit port and `--strictPort`, plugin `npm run dev`).
-- Anything you could not do without further core changes.
+Report plugin paths and remote URLs (or pending publication), functionality and verification,
+API routes and extension points, unchanged core revisions, saved ports and exact restart commands
+(`.agent/compose.sh`, `.agent/frontend.sh`, plugin `npm run dev`), and scaffold issue/PR links.
+Call out unsupported features and any verification or publication still pending.

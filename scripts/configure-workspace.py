@@ -3,6 +3,7 @@
 
 Read care-scaffold.env in the workspace root. Explicit ports win; blank or missing
 ports are allocated and saved. Reruns preserve assignments, even while running.
+The workspace defaults to this script's scaffold checkout, regardless of cwd.
 Use --check-ports before a cold start to check all saved ports without rewriting
 configuration. Compose and Vite --strictPort still catch later conflicts.
 Requires Docker Compose >= 2.24.4.
@@ -125,6 +126,10 @@ set -euo pipefail
 STACK_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 set -a
 source "$STACK_DIR/../care-scaffold.env"
+# Load this workspace's independent plugin repository paths.
+if [[ -f "$STACK_DIR/paths.env" ]]; then
+  source "$STACK_DIR/paths.env"
+fi
 set +a
 compose_version="$(docker compose version --short)"
 if [[ ! "$compose_version" =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
@@ -135,6 +140,9 @@ major=${BASH_REMATCH[1]} minor=${BASH_REMATCH[2]} patch=${BASH_REMATCH[3]}
 if (( major < 2 || (major == 2 && minor < 24) || (major == 2 && minor == 24 && patch < 4) )); then
   echo "Docker Compose >= 2.24.4 is required for isolated port overrides." >&2
   exit 1
+fi
+if [[ -f "$STACK_DIR/plugin.compose.yaml" ]]; then
+  set -- -f "$STACK_DIR/plugin.compose.yaml" "$@"
 fi
 exec docker compose \
   --project-name "$COMPOSE_PROJECT_NAME" \
@@ -227,7 +235,8 @@ def configure(workspace):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--workspace", type=Path, required=True)
+    parser.add_argument("--workspace", type=Path, default=Path(__file__).resolve().parent.parent,
+                        help="Workspace root (default: this scaffold checkout)")
     parser.add_argument("--check-ports", action="store_true", help="Check saved ports before a cold start, without changing files")
     args = parser.parse_args()
     try:

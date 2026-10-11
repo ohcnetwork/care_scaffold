@@ -21,6 +21,22 @@ spec.loader.exec_module(config)
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_default_workspace_is_script_checkout_not_cwd(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout = Path(temporary) / "care_scaffold"
+            scripts = checkout / "scripts"
+            scripts.mkdir(parents=True)
+            script = scripts / "configure-workspace.py"
+            shutil.copyfile(config.__file__, script)
+            result = subprocess.run([sys.executable, str(script)], cwd=temporary,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            values = config.read_env(checkout / "care-scaffold.env")
+            self.assertEqual(Path(values["WORKSPACE"]), checkout.resolve())
+            self.assertEqual(Path(values["CARE_BE"]), checkout.resolve() / "care")
+            self.assertEqual(Path(values["CARE_FE"]), checkout.resolve() / "care_fe")
+            self.assertFalse((Path(temporary) / "care-scaffold.env").exists())
+
     def test_loopback_conflicts_and_block_allocation(self):
         for family, address in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
             try:
@@ -77,7 +93,8 @@ class ConfigurationTests(unittest.TestCase):
                 "if sys.argv[1:] == ['compose', 'version', '--short']:\n"
                 "    print(os.environ.get('TEST_COMPOSE_VERSION', '2.24.4'))\n"
                 "else:\n"
-                "    print(json.dumps({'args': sys.argv[1:], 'care_be': os.environ['CARE_BE']}))\n"
+                "    print(json.dumps({'args': sys.argv[1:], 'care_be': os.environ['CARE_BE'], "
+                "'plugin_be': os.environ.get('PLUGIN_BE'), 'plugin_fe': os.environ.get('PLUGIN_FE')}))\n"
             )
             binary.chmod(0o755)
             env = {**os.environ, "PATH": f"{temporary}:{os.environ['PATH']}", "CARE_BE": "/wrong", "CARE_API_PORT": "9000"}
@@ -91,6 +108,30 @@ class ConfigurationTests(unittest.TestCase):
             env_file = Path(args[args.index("--env-file") + 1]).resolve()
             self.assertEqual(env_file, (workspace / "care-scaffold.env").resolve())
             self.assertEqual(args.count("-f"), 3)
+            self.assertEqual(args[-3:], ["config", "--format", "json"])
+            plugins = {key: str(Path(temporary) / f"plugin {key} $HOME")
+                       for key in ("PLUGIN_BE", "PLUGIN_FE")}
+            (workspace / ".agent/paths.env").write_text(
+                "".join(f"{key}='{value}'\n" for key, value in plugins.items())
+            )
+            result = subprocess.run([str(wrapper), "config"], env=env, check=True, capture_output=True, text=True)
+            invocation = json.loads(result.stdout)
+            self.assertEqual(invocation["plugin_be"], plugins["PLUGIN_BE"])
+            self.assertEqual(invocation["plugin_fe"], plugins["PLUGIN_FE"])
+            self.assertEqual(invocation["args"].count("-f"), 3)
+            plugin_override = workspace / ".agent/plugin.compose.yaml"
+            plugin_override.write_text("services: {}\n")
+            result = subprocess.run([str(wrapper), "config", "--format", "json"], env=env, check=True, capture_output=True, text=True)
+            invocation = json.loads(result.stdout)
+            args = invocation["args"]
+            self.assertEqual(
+                [Path(args[index + 1]).resolve() for index, arg in enumerate(args) if arg == "-f"],
+                [path.resolve() for path in (
+                    Path(values["CARE_BE"]) / "docker-compose.yaml",
+                    Path(values["CARE_BE"]) / "docker-compose.local.yaml",
+                    workspace / ".agent/compose.override.yaml", plugin_override,
+                )],
+            )
             self.assertEqual(args[-3:], ["config", "--format", "json"])
             old = subprocess.run([str(wrapper), "up"], env={**env, "TEST_COMPOSE_VERSION": "2.24.3"}, capture_output=True, text=True)
             self.assertNotEqual(old.returncode, 0)
@@ -241,9 +282,22 @@ volumes:
             (backend / "docker-compose.local.yaml").write_text("""services:
   backend:
     image: care_local
+    build:
+      context: .
+      dockerfile: docker/dev.Dockerfile
+      args:
+        ADDITIONAL_PLUGS: stale-build-value
+    environment:
+      ADDITIONAL_PLUGS: stale-runtime-value
+    volumes: [".:/app"]
+    entrypoint: ["bash", "scripts/start-dev.sh"]
     ports: ["9000:9000", "9876:9876"]
   celery:
     image: care_local
+    environment:
+      ADDITIONAL_PLUGS: stale-runtime-value
+    volumes: [".:/app"]
+    entrypoint: ["bash", "scripts/celery-dev.sh"]
 """)
             result = subprocess.run([str(workspace / ".agent/compose.sh"), "config", "--format", "json"], capture_output=True, text=True, check=True)
             merged = json.loads(result.stdout)
@@ -267,6 +321,39 @@ volumes:
             # Compose escapes literal dollars in its reusable config output.
             source = merged["services"]["minio"]["volumes"][0]["source"].replace("$$", "$")
             self.assertEqual(source, str((backend / "care/media/minio").resolve()))
+
+            # Exercise the documented integration verbatim, so the bootstrap and wrapper
+            # cannot silently diverge while unit checks of either still pass.
+            bootstrap = (Path(__file__).resolve().parent.parent / "bootstrap.prompt.md").read_text()
+            example = re.search(r"### 6\.1 Backend\b.*?```yaml\n(.*?)\n```", bootstrap, re.S)
+            self.assertIsNotNone(example, "Bootstrap must include its external backend Compose example")
+            stack_dir = workspace / ".agent"
+            plugin = backend.resolve() / "care_connect"
+            plugin.mkdir()
+            (stack_dir / "paths.env").write_text(f"PLUGIN_BE='{plugin}'\n")
+            (stack_dir / "plugin.compose.yaml").write_text(example[1] + "\n")
+            core_files = {path: path.read_bytes() for path in backend.glob("docker-compose*.yaml")}
+            result = subprocess.run([str(stack_dir / "compose.sh"), "config", "--format", "json"], capture_output=True, text=True, check=True)
+            merged = json.loads(result.stdout)
+            self.assertEqual(merged["services"]["backend"]["build"]["args"]["ADDITIONAL_PLUGS"], "")
+            for service, script in (("backend", "start-dev.sh"), ("celery", "celery-dev.sh")):
+                settings = merged["services"][service]
+                self.assertEqual(json.loads(settings["environment"]["ADDITIONAL_PLUGS"]), [{
+                    "name": "care_connect", "package_name": "/plugins/care_connect", "version": "",
+                    "configs": {"CONNECT_ENABLED": True},
+                }])
+                self.assertEqual(settings["entrypoint"], [
+                    "bash", "-c", f"python -m pip install -e /plugins/care_connect && exec bash scripts/{script}",
+                ])
+                mounts = {volume["target"]: volume for volume in settings["volumes"]}
+                self.assertEqual(mounts["/app"]["source"].replace("$$", "$"), str(backend.resolve()))
+                self.assertEqual(mounts["/plugins/care_connect"]["source"].replace("$$", "$"), str(plugin.resolve()))
+                self.assertEqual(mounts["/plugins/care_connect"]["type"], "bind")
+                self.assertFalse(mounts["/plugins/care_connect"].get("bind", {}).get("create_host_path", False))
+                self.assertEqual(settings["environment"]["BUCKET_EXTERNAL_ENDPOINT"],
+                                 f"http://localhost:{values['CARE_S3_PORT']}")
+                self.assertEqual(settings["image"], f"{project}_backend:local")
+            self.assertEqual({path: path.read_bytes() for path in core_files}, core_files)
 
 
 if __name__ == "__main__":

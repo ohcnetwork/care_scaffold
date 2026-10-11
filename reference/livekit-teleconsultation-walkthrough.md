@@ -1,13 +1,19 @@
 # Reference walkthrough — building the LiveKit teleconsultation plugin
 
-This is the **acceptance test** for `care_scaffold`. It reconstructs `care_connect` /
-`care_connect_fe` (video consultations for CARE, backed by LiveKit) from nothing, and records
-exactly how much of core had to change: **five extension points and one type fix.**
+This is a **historical worked example** for `care_scaffold`: `care_connect` / `care_connect_fe`
+(video consultations for CARE, backed by LiveKit). Its original implementation added five core
+extension points and one type fix. That history is not permission to repeat those changes.
+
+Current plugin work treats the `care` and `care_fe` checkouts as read-only. Verify that each
+required API and extension point exists in the checked-out revisions before using this example. If a
+requirement is unsupported, file an issue on
+[`ohcnetwork/care_scaffold`](https://github.com/ohcnetwork/care_scaffold/issues) with the missing
+capability and evidence, then use a supported alternative or defer that feature.
 
 Use it two ways:
 
 - As a **worked example** an agent can pattern-match against for any new plugin.
-- As **ground truth** to diff a fresh agent's output against when validating this repo.
+- As a **verification checklist** for supported plugin behavior, subject to the read-only core rule.
 
 ---
 
@@ -33,8 +39,8 @@ Run the decision tree from `care-plugin-architecture`:
 | LiveKit credentials | `PluginSettings` + `Plug(configs=…)` | **0** |
 | Join/decline/invite/end APIs | Plugin viewsets under `/api/care_connect/` | **0** |
 | Patient portal access | `otp/`-prefixed viewsets, phone-scoped | **0** |
-| Buttons on appointment pages | Extension points | **small** |
-| In-progress call banner | `AppShellOverlay` extension point | **small** |
+| Buttons on appointment pages | Existing extension points | **0** — otherwise blocked |
+| In-progress call banner | Existing `AppShellOverlay` extension point | **0** — otherwise blocked |
 | Full call page | `manifest.routes` → `/connect/session/:id` | **0** |
 
 The only thing needing a new column would have been the availability flag — and `meta` removes
@@ -155,9 +161,11 @@ shows the raw string `tele_session` and clicking does nothing.
 
 ---
 
-## Step 5 — The complete core diff
+## Step 5 — Historical core prerequisites
 
-**care_fe — 5 extension points added to `src/pluginTypes.ts` + their render sites:**
+The original implementation added these five extension points to `care_fe/src/pluginTypes.ts`
+and their render sites. Inspect the local checkout to determine which are available today;
+**do not add or patch them during plugin development**.
 
 | Extension point | Render site |
 | --- | --- |
@@ -167,42 +175,44 @@ shows the raw string `tele_session` and clicking does nothing.
 | `AppointmentSlotGroupHeader` | `pages/Appointments/BookAppointment/AppointmentSlotPicker.tsx` **and** `pages/PublicAppointments/Schedule.tsx` |
 | `AppShellOverlay` | `src/Routers/AppRouter.tsx`, inside `PermissionProvider`, after `</main>` |
 
-Plus one genuine bug fix: `TokenSlot["availability"]` was missing the `id` field that the API
-already returned.
+It also fixed `TokenSlot["availability"]`, which was missing the `id` field that the API already
+returned. This is historical context, not a core fix to apply locally.
 
-**care — 1 file:** the `Plug(name="care_connect", …)` entry in `plug_config.py`.
+Historically, backend registration added `Plug(name="care_connect", …)` to core's `plug_config.py`.
+Current work uses the external runtime configuration produced by `bootstrap.prompt.md` instead.
 
-Every name is generic and location-based. Nothing in core mentions teleconsultation, LiveKit, or
-the plugin. **That is the bar.**
+Current acceptance requires **zero changes to either core checkout**. Missing prerequisites are
+reported on `care_scaffold` with the core commit, inspected paths, and affected user flow.
 
 ---
 
 ## Step 6 — Running it locally
 
-Complete `bootstrap.prompt.md` first to create isolated checkouts and save available ports.
+Complete `bootstrap.prompt.md` first to clone missing core checkouts, create the independent
+plugin repositories, and save isolated runtime configuration and available ports.
 Generate the plugin with `--port "$PLUGIN_PORT" --api-url "$CARE_API_URL"` after sourcing
-`$WORKSPACE/care-scaffold.env`. Then run:
+`$WORKSPACE/care-scaffold.env`. Use bootstrap's host frontend launch instructions, which supply
+configuration without editing the core checkout. Backend and plugin frontend commands are:
 
 ```bash
 source "$WORKSPACE/care-scaffold.env"
+source "$WORKSPACE/.agent/paths.env"
 
 # Backend and dependencies, scoped to this workspace.
 "$WORKSPACE/.agent/compose.sh" up -d --wait --build
 "$WORKSPACE/.agent/compose.sh" exec backend python manage.py migrate
+# First setup only; do not reload fixtures into a populated workspace.
 "$WORKSPACE/.agent/compose.sh" exec backend python manage.py load_fixtures
 
 # Plugin frontend, in a separate terminal with the saved configuration loaded.
-cd "$WORKSPACE/care_connect_fe"
+cd "$PLUGIN_FE"
 npm run dev
 
-# Host, in another terminal with the saved configuration loaded.
-cd "$CARE_FE"
-npm run dev -- --host 127.0.0.1 --port "$CARE_FE_PORT" --strictPort
 ```
 
-`$CARE_FE/.env.local` uses the saved `CARE_API_URL` for `REACT_CARE_API_URL` and
-`ohcnetwork/care_connect_fe@localhost:<PLUGIN_PORT>/assets/remoteEntry.js` for
-`REACT_ENABLED_APPS`, substituting the saved numeric plugin port.
+Use bootstrap's external frontend configuration for the saved `CARE_API_URL` and
+`ohcnetwork/care_connect_fe@localhost:<PLUGIN_PORT>/assets/remoteEntry.js`, substituting the saved
+numeric plugin port. Do not write `.env.local` or other configuration inside the core checkouts.
 
 LiveKit is an optional additional service: the base workspace allocator does not allocate its
 ports. Before starting it, check and record separate available HTTP/WebSocket and media TCP/UDP
@@ -242,9 +252,10 @@ For Firefox also set `media.peerconnection.ice.obfuscate_host_addresses=false`.
 | Separate OTP route surface for the patient portal | ☐ |
 | Manifest exposes lazy components; LiveKit not in the manifest chunk | ☐ |
 | i18n keys prefixed and in the plugin's own locale file | ☐ |
-| Core diff ≤ 5 generic extension points + `plug_config.py` | ☐ |
-| No core file mentions the plugin by name | ☐ |
+| Both core checkouts unchanged from their starting state | ☐ |
+| Required extension points verified in the checked-out host; unsupported features reported to `care_scaffold` | ☐ |
 | Notifications integration degrades to a no-op when absent | ☐ |
 
-Anything the agent had to ask about, or got wrong, is a gap in the skills — fix the skill, not
-the agent.
+When scaffold instructions cause a blocker or a wrong direction, file a `care_scaffold` issue with
+evidence. A scaffold PR can correct the template or skill; plugin implementation stays in the
+independent plugin repositories, and core remains unchanged.

@@ -1,32 +1,30 @@
 ---
 name: care-backend-plugin
-description: How to build the Django side of a CARE plugin — package layout, AppConfig, PluginSettings, plug_config.py registration, URL mounting under /api/care_<name>/, migrations, signals, celery tasks, and the editable-install gotchas that silently break celery. Use when creating or modifying a care_<name> backend plugin.
+description: How to build the Django side of a CARE plugin — package layout, AppConfig, PluginSettings, external ADDITIONAL_PLUGS registration, URL mounting under /api/care_<name>/, migrations, signals, celery tasks, and the editable-install gotchas that silently break celery. Use when creating or modifying a care_<name> backend plugin.
 ---
 
 # CARE Backend Plugin (Django)
 
-A backend plugin is an ordinary pip-installable Django app. Core discovers it through
-`plug_config.py`; nothing else in core knows it exists.
+A backend plugin is an ordinary pip-installable Django app in its own Git repository. Core is
+a read-only checkout. Register the plugin through the existing `ADDITIONAL_PLUGS` environment
+variable, supplied to both backend and Celery by `.agent/plugin.compose.yaml`.
 
 ## How core loads plugins
 
-```python
-# care/plug_config.py  — the ONLY core file you edit
-from plugs.manager import PlugManager
-from plugs.plug import Plug
+`PlugManager` combines the core's existing plugins with this external JSON array:
 
-care_connect = Plug(
-    name="care_connect",          # Django app label → INSTALLED_APPS entry
-    package_name="care_connect",  # pip target: local dir, or git+https://github.com/org/care_connect.git
-    version="",                   # "" + local dir ⇒ pip install -e ./care_connect ; else "@main"
-    configs={                     # → settings.PLUGIN_CONFIGS["care_connect"]
-        "CONNECT_LIVEKIT_URL": "ws://localhost:7880",
-    },
-)
-
-plugs = [care_connect, ...]
-manager = PlugManager(plugs)
+```json
+[{
+  "name": "care_connect",
+  "package_name": "/plugins/care_connect",
+  "version": "",
+  "configs": {"CONNECT_LIVEKIT_URL": "ws://localhost:7880"}
+}]
 ```
+
+The `name` is the Django app label; `package_name` is a pip target. An empty version is required
+for a local path. Editable installation is a separate `python -m pip install -e` step; the core
+installer does not add `-e`. Do not edit `care/plug_config.py`.
 
 Core then does, in `config/settings/base.py`:
 
@@ -46,8 +44,8 @@ for plug in settings.PLUGIN_APPS:
 **Consequence:** your `urls.py` is automatically mounted at `/api/care_<name>/`. Never hardcode
 that prefix in your route definitions.
 
-Plugins can also be injected at deploy time without editing `plug_config.py` at all, via the
-`ADDITIONAL_PLUGS` env var (a JSON array of `Plug` kwargs). Prefer this for production.
+For deployments, supply a published package or Git URL through the same external registration
+mechanism; never encode a developer's local filesystem path in deployment configuration.
 
 ## Package layout
 
@@ -228,79 +226,53 @@ registers, and fails silently.
 
 ## Installing during development
 
-Run the isolated bootstrap first and load its saved configuration:
+Follow bootstrap Phase 6.1. Keep the plugin in its independent repository at
+`$WORKSPACE/care/care_connect`, locally excluded from core Git tracking and mounted at
+`/plugins/care_connect` in both containers. The external `.agent/plugin.compose.yaml` supplies:
+
+- An empty `build.args.ADDITIONAL_PLUGS`, because unpublished host paths are unavailable at image build time.
+- Runtime `ADDITIONAL_PLUGS` JSON for registration in both backend and Celery.
+- Entrypoints that run `python -m pip install -e /plugins/care_connect`, then execute the
+  unmodified `scripts/start-dev.sh` or `scripts/celery-dev.sh` respectively.
 
 ```bash
 source "$WORKSPACE/care-scaffold.env"
-```
-
-`CARE_BE` must refer to `$WORKSPACE/care`, never another development checkout. All backend
-commands use the generated Compose wrapper so the project, images, volumes and host ports stay
-isolated. The plugin must live as a **real directory inside that backend checkout**:
-
-```bash
-mv /path/to/care_connect "$CARE_BE/care_connect"    # or clone directly into $CARE_BE
-```
-
-> ⚠️ **Not a symlink.** `docker/dev.Dockerfile` does `COPY . /app`; Docker's build context cannot
-> follow a symlink pointing outside it, so the plugin arrives empty in the image and
-> `install_plugins.py` installs nothing. This works fine under a bind-mounted venv setup and then
-> breaks the moment someone builds the image — a confusing, delayed failure.
-
-### Docker: rebuild the image
-
-The Dockerfile installs plugins **at build time**:
-
-```dockerfile
-COPY . $APP_HOME/
-RUN python3 $APP_HOME/install_plugins.py
-```
-
-The virtualenv lives at `/.venv` **inside the image**. Compose bind-mounts only the source tree
-(`.:/app`), not the venv. Therefore a newly registered plug does not exist in a running container
-until the image is rebuilt:
-
-```bash
 "$WORKSPACE/.agent/compose.sh" up -d --wait --build
 ```
 
-`backend` and `celery` share this workspace's image, so a single rebuild covers both.
+The wrapper loads saved plugin paths and the external override. Each container installs the
+plugin into its own virtualenv layer on every start, so recreation does not lose registration or
+the editable install. The unmodified core Dockerfile still installs its built-in plugins during
+the image build. Do not copy plugin source into core or mount over core configuration files.
 
-> Use `"$WORKSPACE/.agent/compose.sh" down` to stop the stack without removing data.
-> Never add `-v`: that deletes the volumes and their database contents.
-
-`ADDITIONAL_PLUGS` is a Docker **build arg**, so changing it also requires a rebuild.
-
-### Fast iteration (temporary)
-
-While actively editing plugin code, skip the rebuild:
+Celery's watcher watches `/app`, not the external plugin mount. After plugin source changes:
 
 ```bash
-"$WORKSPACE/.agent/compose.sh" exec backend python install_plugins.py
-"$WORKSPACE/.agent/compose.sh" exec celery python install_plugins.py
-"$WORKSPACE/.agent/compose.sh" restart backend celery
+"$WORKSPACE/.agent/compose.sh" restart celery
 ```
 
-Installing inside a running container writes to a **single container's writable layer**, not the shared image — which is
-why you must run it against both containers, and why the change vanishes when a container is
-recreated. Treat it as a patch; rebuild before you trust a result.
+Restart backend as well if autoreload did not pick up a change. A metadata/dependency change
+requires restarting both containers to rerun their editable installs.
 
 ### Diagnosing a stale install
 
-Symptom: your backend change works, but the same code behaves like an older version in celery
-tasks — with **no import error**. It silently runs stale code.
-
 ```bash
 "$WORKSPACE/.agent/compose.sh" exec backend python -c "import care_connect; print(care_connect.__file__)"
-"$WORKSPACE/.agent/compose.sh" exec celery pip show care_connect     # want 0.1.0-0.editable, not a frozen version
+"$WORKSPACE/.agent/compose.sh" exec celery pip show care_connect
 ```
+
+The import and editable project location must point to `/plugins/care_connect` in both containers.
+Verify `compose.sh config` includes the mount, environment and installing entrypoint for both.
+Do not use `install_plugins.py` as an editable-install shortcut: it performs a regular install.
+Use `compose.sh down` to stop only this stack; never add `-v` without approval.
 
 ## Checklist before you call the backend done
 
 - [ ] `curl` proves every endpoint works, with a real token, as each relevant role.
 - [ ] `makemigrations --check --dry-run` is clean.
 - [ ] No import of your plugin anywhere in `care/`.
-- [ ] Core diff is `plug_config.py` only.
+- [ ] Both core checkouts have no tracked changes; all registration is external.
 - [ ] Secrets come from `configs`/env, and no real key is committed.
-- [ ] Plugin is a real directory inside `$CARE_BE`, not a symlink.
-- [ ] Workspace image rebuilt through `.agent/compose.sh up -d --wait --build` after registering the plug.
+- [ ] Plugin has its own Git root under `care/`, is locally excluded from core, and is mounted at
+  `/plugins/<plugin>` in both services.
+- [ ] Both services recreated through `.agent/compose.sh up -d --wait` after external registration changes.
